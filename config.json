@@ -1,0 +1,28 @@
+{
+  "root": "c:/Programming_STC",
+  "projects": [],
+  "auto_discover": true,
+  "scan_depth": 4,
+  "exclude": [],
+  "hidden": [],
+  "collapsed": [
+    "dashboard",
+    "firefox-download-sorter",
+    "PPS",
+    "Ecount_statics"
+  ],
+  "refresh_seconds": 30,
+  "display_mode": "tray",
+  "widget": {
+    "x": 440,
+    "y": 105,
+    "width": 355,
+    "opacity": 0.91,
+    "theme": "dark",
+    "topmost": true,
+    "max_todos": 12,
+    "todos_collapsed": false,
+    "collapse_highlight": true,
+    "collapse_hotkey": "ctrl+alt+d"
+  }
+}
