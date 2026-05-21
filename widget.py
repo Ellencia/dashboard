@@ -32,6 +32,7 @@ from core import (
     toggle_item,
 )
 from hotkey import GlobalHotkey
+import editor
 
 FONT = "Malgun Gothic"   # 윈도우 기본 한글 폰트
 TITLEBAR_H = 34          # 제목 표시줄 높이(px)
@@ -194,6 +195,8 @@ class DashboardWidget:
         # 우클릭 메뉴
         self.menu = tk.Menu(self.root, tearoff=0)
         self.menu.add_command(label="설정...", command=self._open_settings)
+        self.menu.add_command(label="새 프로젝트 만들기...",
+                              command=self._new_project)
         self.menu.add_command(label="새로고침", command=self.refresh)
         self.menu.add_command(label="테마 전환 (다크/라이트)", command=self._switch_theme)
         self.menu.add_separator()
@@ -494,6 +497,9 @@ class DashboardWidget:
         """프로젝트 카드 우클릭 메뉴 — 접기 / 숨기기 / 파일 열기."""
         m = self.proj_menu
         m.delete(0, "end")
+        m.add_command(label="편집...",
+                      command=lambda: editor.open_project_editor(
+                          self.root, proj, self.theme, self.refresh))
         m.add_command(label="펴기" if proj.collapsed else "접기",
                       command=lambda: self._toggle_project_collapsed(proj))
         m.add_command(label=f"'{proj.name}' 숨기기",
@@ -594,6 +600,11 @@ class DashboardWidget:
 
     def _show_menu(self, event) -> None:
         self.menu.tk_popup(event.x_root, event.y_root)
+
+    def _new_project(self) -> None:
+        """제목줄 메뉴 — 새 프로젝트 만들기 창을 엶."""
+        editor.open_new_project(self.root, Path(self.cfg["root"]),
+                                self.theme, self.refresh)
 
     def _toggle_pin(self) -> None:
         """📌 클릭 — '항상 위에 고정'을 켜고 끔."""

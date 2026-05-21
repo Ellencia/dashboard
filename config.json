@@ -6,10 +6,12 @@
   "exclude": [],
   "hidden": [],
   "collapsed": [
-    "dashboard",
     "firefox-download-sorter",
+    "dashboard",
     "PPS",
-    "Ecount_statics"
+    "buyflow",
+    "Ecount_statics",
+    "MCP-cad"
   ],
   "refresh_seconds": 30,
   "display_mode": "tray",

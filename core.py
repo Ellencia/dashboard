@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 # 이 파일(core.py)이 들어있는 폴더 = 대시보드 폴더
@@ -375,6 +376,148 @@ def toggle_item(item: TodoItem, status_path: Path) -> None:
         lines[idx] = re.sub(r"\[[xX]\]", "[ ]", line, count=1)
 
     status_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ------------------------------------------------------------------
+# GUI 편집용 — STATUS.md / update.md 를 해당 줄만 고쳐 쓰는 함수들
+# ------------------------------------------------------------------
+def _write_lines(path: Path, lines: list[str]) -> None:
+    """줄 목록을 UTF-8로 저장 (끝에 줄바꿈 1개 보장)."""
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def set_project_name(status_path: Path, name: str) -> None:
+    """STATUS.md의 '# 제목' 줄을 새 이름으로 교체 (없으면 맨 위에 추가)."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            lines[i] = f"# {name}"
+            break
+    else:
+        lines.insert(0, f"# {name}")
+    _write_lines(status_path, lines)
+
+
+def set_project_note(status_path: Path, note: str) -> None:
+    """STATUS.md의 첫 '> 메모' 줄을 교체. 빈 값이면 메모 줄을 지움."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    note_idx = next((i for i, ln in enumerate(lines) if ln.startswith(">")),
+                    None)
+    if not note.strip():
+        if note_idx is not None:
+            del lines[note_idx]
+    elif note_idx is not None:
+        lines[note_idx] = f"> {note}"
+    else:
+        # 메모 줄이 없으면 '# 제목' 바로 다음에 끼워 넣음
+        title_idx = next((i for i, ln in enumerate(lines)
+                          if ln.startswith("# ")), -1)
+        lines.insert(title_idx + 1, f"> {note}")
+    _write_lines(status_path, lines)
+
+
+def add_item(status_path: Path, text: str) -> None:
+    """STATUS.md에 '- [ ] text' 한 줄 추가 (마지막 체크박스 다음, 없으면 맨 끝)."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    last = -1
+    for i, line in enumerate(lines):
+        if _CHECK_RE.match(line):
+            last = i
+    new_line = f"- [ ] {text}"
+    if last >= 0:
+        lines.insert(last + 1, new_line)
+    else:
+        lines.append(new_line)
+    _write_lines(status_path, lines)
+
+
+def rename_item(status_path: Path, old_text: str, new_text: str) -> None:
+    """STATUS.md에서 old_text 항목의 텍스트만 교체 (체크 상태는 유지)."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        m = _CHECK_RE.match(line)
+        if m and m.group(2) == old_text:
+            mark = "x" if m.group(1).lower() == "x" else " "
+            lines[i] = f"- [{mark}] {new_text}"
+            break
+    _write_lines(status_path, lines)
+
+
+def delete_item(status_path: Path, text: str) -> None:
+    """STATUS.md에서 해당 텍스트의 체크박스 줄을 삭제."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        m = _CHECK_RE.match(line)
+        if m and m.group(2) == text:
+            del lines[i]
+            break
+    _write_lines(status_path, lines)
+
+
+def set_item_done(status_path: Path, text: str, done: bool) -> None:
+    """STATUS.md에서 해당 항목의 체크 상태를 done 값으로 맞춤."""
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    mark = "x" if done else " "
+    for i, line in enumerate(lines):
+        m = _CHECK_RE.match(line)
+        if m and m.group(2) == text:
+            lines[i] = f"- [{mark}] {text}"
+            break
+    _write_lines(status_path, lines)
+
+
+def add_update_entry(update_path: Path, text: str) -> None:
+    """update.md 오늘 날짜 블록에 변경 한 줄 추가 (블록/파일 없으면 만듦)."""
+    today = date.today().isoformat()
+    if update_path.exists():
+        lines = update_path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = ["# 변경 이력", ""]
+    bullet = f"- {text}"
+
+    today_idx = None
+    for i, line in enumerate(lines):
+        m = _HEADING2_RE.match(line)
+        if m and today in m.group(1):
+            today_idx = i
+            break
+
+    if today_idx is not None:
+        # 오늘 블록 헤더 다음(빈 줄은 건너뜀)에 글머리표 삽입 = 맨 위 항목
+        pos = today_idx + 1
+        while pos < len(lines) and lines[pos].strip() == "":
+            pos += 1
+        lines.insert(pos, bullet)
+    else:
+        # 오늘 블록을 새로 만들어 첫 ## 블록 앞에 삽입
+        first_h2 = next((i for i, ln in enumerate(lines)
+                         if _HEADING2_RE.match(ln)), None)
+        block = [f"## {today}", "", bullet, ""]
+        if first_h2 is not None:
+            lines[first_h2:first_h2] = block
+        else:
+            if lines and lines[-1].strip() != "":
+                lines.append("")
+            lines.extend(block)
+    _write_lines(update_path, lines)
+
+
+def create_project(parent: Path, folder_name: str, display_name: str) -> Path:
+    """새 프로젝트 폴더와 STATUS.md / update.md 를 만들고 폴더 경로를 반환."""
+    folder = parent / folder_name
+    folder.mkdir(parents=True, exist_ok=True)
+
+    status_path = folder / STATUS_FILENAME
+    if not status_path.exists():
+        status_path.write_text(
+            f"# {display_name}\n\n- [ ] 첫 할 일\n", encoding="utf-8")
+
+    update_path = folder / UPDATE_FILENAME
+    if not update_path.exists():
+        update_path.write_text(
+            f"# 변경 이력\n\n## {date.today().isoformat()}\n\n- 프로젝트 시작\n",
+            encoding="utf-8")
+    return folder
 
 
 if __name__ == "__main__":
