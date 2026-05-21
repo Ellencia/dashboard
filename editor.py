@@ -41,6 +41,42 @@ def _button(parent, theme, text, cmd, accent=False):
                      font=(FONT, 9, "bold") if accent else (FONT, 9))
 
 
+class CheckLabel:
+    """다크 테마에서도 잘 보이는 ☐/☑ 체크박스 (tk.Checkbutton 대체).
+
+    tk.Checkbutton은 체크 표시가 배경과 색이 비슷해 잘 안 보여서,
+    라벨에 ☐/☑ 문자를 직접 그리고 색을 또렷하게 줌.
+    """
+
+    def __init__(self, parent, theme, checked=False, command=None) -> None:
+        self.theme = theme
+        self.checked = checked
+        self.command = command
+        self.label = tk.Label(parent, bg=theme["bg"], font=(FONT, 11),
+                              cursor="hand2", width=2)
+        self._refresh()
+        self.label.bind("<Button-1>", lambda e: self.toggle())
+
+    def _refresh(self) -> None:
+        self.label.configure(
+            text="☑" if self.checked else "☐",
+            fg=self.theme["accent"] if self.checked else self.theme["subtext"])
+
+    def toggle(self) -> None:
+        self.checked = not self.checked
+        self._refresh()
+        if self.command is not None:
+            self.command(self.checked)
+
+    def set(self, checked: bool) -> None:
+        self.checked = checked
+        self._refresh()
+
+    def pack(self, **kw):
+        self.label.pack(**kw)
+        return self
+
+
 class _ProjectEditor:
     """프로젝트 한 개의 STATUS.md / update.md 를 편집하는 창."""
 
@@ -139,16 +175,11 @@ class _ProjectEditor:
         row = tk.Frame(self.task_frame, bg=t["bg"])
         row.pack(fill="x", pady=1)
 
-        done_var = tk.BooleanVar(value=done)
-
-        def on_check():
-            core.set_item_done(self.status_path, state["text"],
-                               done_var.get())
+        def on_check(checked):
+            core.set_item_done(self.status_path, state["text"], checked)
             self.on_change()
 
-        tk.Checkbutton(row, variable=done_var, command=on_check,
-                       bg=t["bg"], activebackground=t["bg"],
-                       selectcolor=t["card"]).pack(side="left")
+        CheckLabel(row, t, checked=done, command=on_check).pack(side="left")
 
         text_var = tk.StringVar(value=text)
         ent = _entry(row, t, text_var)

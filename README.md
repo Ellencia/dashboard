@@ -21,11 +21,28 @@
 
 ---
 
-## 1. 필요한 것
+## 1. 설치 — 처음 한 번 (다른 PC·새 작업 폴더)
 
+### 준비물
 - **Python 3.10 이상** (확인: PowerShell에서 `python --version`)
-- **위젯 모드**: 추가 설치 패키지 없음 (파이썬 기본 `tkinter`만 사용)
-- **트레이 모드**: `pip install pystray pillow` 필요
+
+### 셋업 3단계
+1. **`dashboard` 폴더를 작업 폴더 안에 통째로 넣는다.**
+   작업 폴더 = 프로젝트들을 모아 둘 상위 폴더 (예: `C:\Work`).
+   → `C:\Work\dashboard\` 형태가 됨.
+2. **`setup.bat` 을 더블클릭한다.** (아래 표의 셋업을 자동으로 함)
+3. **`run.bat` 으로 실행한다.** (윈도우 켤 때 자동 실행: `install_autostart.bat`)
+
+### `setup.bat` 이 하는 일
+| 단계 | 내용 |
+|---|---|
+| config.json | `root` 를 작업 폴더 경로로 자동 설정 (위젯이 훑을 범위) |
+| AI 지침 파일 | `01_code.md`·`CLAUDE.md`·`AGENTS.md`·`GEMINI.md` 를 작업 폴더 최상위에 배치 (이미 있으면 보존) — AI가 STATUS.md·update.md를 알아서 관리하게 하는 파일들 (6장 참고) |
+| 패키지 | 트레이 모드용 `pystray`·`pillow` 설치 (위젯 모드만 쓰면 없어도 됨) |
+
+> - `dashboard` 폴더를 작업 폴더 **바로 아래**가 아니라 더 깊이 넣었다면,
+>   `setup.bat` 실행 후 `config.json` 의 `root` 만 작업 폴더 경로로 직접 고치면 됨.
+> - 가상환경(venv)을 쓰면 그 환경에 `pip install pystray pillow` 를 따로 해야 함.
 
 ---
 
@@ -222,6 +239,9 @@ dashboard/
 ├── update.md            # 이 대시보드 자신의 변경 이력
 ├── STATUS_TEMPLATE.md   # 새 프로젝트에 복사해 쓸 STATUS.md 본
 ├── UPDATE_TEMPLATE.md   # 새 프로젝트에 복사해 쓸 update.md 본
+├── workspace_templates/ # 셋업 시 작업 폴더에 배치되는 AI 지침 파일 4개
+├── setup.bat            # 처음 한 번 — 셋업 (1장 참고)
+├── setup.ps1            # setup.bat이 호출하는 셋업 스크립트
 ├── run.bat              # 평소 실행
 ├── run_debug.bat        # 오류 확인용 실행
 ├── install_autostart.bat   # 시작프로그램 등록

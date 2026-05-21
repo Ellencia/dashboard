@@ -5,6 +5,8 @@
 
 ## 2026-05-21
 
+- 셋업 자동화(setup.bat) 추가 — 새 작업 폴더에 config root·AI 지침 파일·패키지를 한 번에. README에 설치 절차 명시
+- 편집창·설정창 체크박스 가독성 개선 (tk.Checkbutton → ☐/☑ 라벨) + 설정창 크기 조절 가능
 - 프로젝트 GUI 편집 창 추가 (editor.py) — 할 일·메모·이름 수정, update 기록, 새 프로젝트 생성. 텍스트 직접 편집 불필요
 - README에 'AI가 STATUS.md·update.md를 자동으로 쓰게 하기' 안내 섹션 추가
 

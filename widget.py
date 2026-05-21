@@ -642,15 +642,11 @@ class DashboardWidget:
         self._settings_win = win
         win.title("대시보드 설정")
         win.configure(bg=t["bg"])
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.attributes("-topmost", True)
         win.geometry(f"+{self.root.winfo_x() + 30}+{self.root.winfo_y() + 30}")
 
-        # 현재 설정값을 담는 변수들
-        v_theme = tk.StringVar(value=self.wcfg.get("theme", "dark"))
-        v_topmost = tk.BooleanVar(value=bool(self.wcfg.get("topmost", True)))
-        v_highlight = tk.BooleanVar(
-            value=bool(self.wcfg.get("collapse_highlight", True)))
+        # 현재 설정값 (테마·체크박스는 아래에서 직접 관리)
         v_opacity = tk.IntVar(
             value=int(round(float(self.wcfg.get("opacity", 0.96)) * 100)))
         v_width = tk.IntVar(value=int(self.wcfg.get("width", 340)))
@@ -659,7 +655,7 @@ class DashboardWidget:
         v_hotkey = tk.StringVar(value=self.wcfg.get("collapse_hotkey", ""))
 
         pad = tk.Frame(win, bg=t["bg"])
-        pad.pack(padx=14, pady=12)
+        pad.pack(fill="both", expand=True, padx=14, pady=12)
 
         def add_row(label_text: str) -> tk.Frame:
             r = tk.Frame(pad, bg=t["bg"])
@@ -668,25 +664,39 @@ class DashboardWidget:
                      font=(FONT, 9), width=15, anchor="w").pack(side="left")
             return r
 
-        # 테마
+        # 테마 — 선택된 쪽이 또렷하게 보이도록 강조 버튼으로
         r = add_row("테마")
+        theme_pick = {"value": self.wcfg.get("theme", "dark")}
+        theme_btns: dict = {}
+
+        def pick_theme(val: str) -> None:
+            theme_pick["value"] = val
+            for v, b in theme_btns.items():
+                on = v == val
+                b.configure(bg=t["accent"] if on else t["card"],
+                            fg="#ffffff" if on else t["text"])
+
         for val, txt in (("dark", "다크"), ("light", "라이트")):
-            tk.Radiobutton(r, text=txt, value=val, variable=v_theme,
-                           bg=t["bg"], fg=t["text"], selectcolor=t["card"],
-                           activebackground=t["bg"], activeforeground=t["text"],
-                           font=(FONT, 9)).pack(side="left")
+            b = tk.Label(r, text=txt, font=(FONT, 9), padx=12, pady=2,
+                         cursor="hand2")
+            b.pack(side="left", padx=(0, 4))
+            b.bind("<Button-1>", lambda e, v=val: pick_theme(v))
+            theme_btns[val] = b
+        pick_theme(theme_pick["value"])
 
         # 항상 위 고정
         r = add_row("항상 위 고정")
-        tk.Checkbutton(r, variable=v_topmost, bg=t["bg"],
-                       activebackground=t["bg"], selectcolor=t["card"]).pack(side="left")
+        chk_topmost = editor.CheckLabel(
+            r, t, checked=bool(self.wcfg.get("topmost", True)))
+        chk_topmost.pack(side="left")
 
         # 접었을 때 색 강조
         r = add_row("접었을 때 색 강조")
-        tk.Checkbutton(r, variable=v_highlight, bg=t["bg"],
-                       activebackground=t["bg"], selectcolor=t["card"]).pack(side="left")
+        chk_highlight = editor.CheckLabel(
+            r, t, checked=bool(self.wcfg.get("collapse_highlight", True)))
+        chk_highlight.pack(side="left")
         tk.Label(r, text="접으면 막대가 눈에 띄는 색", bg=t["bg"],
-                 fg=t["subtext"], font=(FONT, 8)).pack(side="left")
+                 fg=t["subtext"], font=(FONT, 8)).pack(side="left", padx=(4, 0))
 
         # 투명도
         r = add_row("투명도 (%)")
@@ -736,9 +746,9 @@ class DashboardWidget:
             w = disk["widget"]
             w["x"] = self.root.winfo_x()       # 현재 창 위치 보존
             w["y"] = self.root.winfo_y()
-            w["theme"] = v_theme.get()
-            w["topmost"] = bool(v_topmost.get())
-            w["collapse_highlight"] = bool(v_highlight.get())
+            w["theme"] = theme_pick["value"]
+            w["topmost"] = chk_topmost.checked
+            w["collapse_highlight"] = chk_highlight.checked
             w["opacity"] = round(int(v_opacity.get()) / 100, 2)
             w["width"] = int(v_width.get())
             w["max_todos"] = maxtodos
@@ -756,6 +766,10 @@ class DashboardWidget:
         tk.Button(btns, text="취소", command=win.destroy, bg=t["card"],
                   fg=t["text"], font=(FONT, 9), relief="flat",
                   width=8, cursor="hand2").pack(side="right")
+
+        # 내용이 다 보이는 자연 크기를 최소 크기로 잡음 (그보다 크게 조절 가능)
+        win.update_idletasks()
+        win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
 
     def _open_path(self, path) -> None:
         """파일이나 폴더를 윈도우 기본 프로그램으로 엶."""
