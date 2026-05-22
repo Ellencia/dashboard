@@ -17,8 +17,8 @@
   "refresh_seconds": 30,
   "display_mode": "tray",
   "widget": {
-    "x": 1124,
-    "y": 159,
+    "x": 696,
+    "y": 101,
     "width": 355,
     "opacity": 0.91,
     "theme": "dark",

@@ -106,6 +106,75 @@ class _Tooltip:
             self.tip = None
 
 
+class _PopupMenu:
+    """위젯 테마에 맞춘 다크 팝업 메뉴 (tk.Menu의 흰 네이티브 메뉴 대체).
+
+    tk.Menu는 운영체제가 그리는 흰색 메뉴라 다크 테마와 어울리지 않음.
+    이 클래스는 overrideredirect Toplevel에 라벨을 쌓아 직접 메뉴를 그림.
+    사용법: add()/add_separator()로 항목을 채운 뒤 popup(x, y) 호출.
+    """
+
+    def __init__(self, parent: tk.Widget, theme: dict) -> None:
+        self.parent = parent
+        self.theme = theme
+        self.items: list = []   # (label, command) 또는 None(구분선)
+
+    def add(self, label: str, command) -> None:
+        self.items.append((label, command))
+
+    def add_separator(self) -> None:
+        self.items.append(None)
+
+    def popup(self, x: int, y: int) -> None:
+        t = self.theme
+        win = tk.Toplevel(self.parent)
+        win.overrideredirect(True)              # 창틀 제거
+        win.attributes("-topmost", True)
+        win.configure(bg=t["bar_bg"])           # 1px 테두리 색
+
+        body = tk.Frame(win, bg=t["card"])
+        body.pack(padx=1, pady=1)               # padx/pady 1 → 테두리 효과
+
+        for item in self.items:
+            if item is None:
+                # 구분선 — 얇은 가로줄
+                tk.Frame(body, bg=t["bar_bg"], height=1).pack(
+                    fill="x", padx=6, pady=3)
+                continue
+            label, command = item
+            row = tk.Label(body, text=label, bg=t["card"], fg=t["text"],
+                           font=(FONT, 9), anchor="w", padx=16, pady=5,
+                           cursor="hand2")
+            row.pack(fill="x")
+            # 마우스 올리면 강조색, 벗어나면 원래색
+            row.bind("<Enter>",
+                     lambda e, r=row: r.configure(bg=t["accent"], fg="#ffffff"))
+            row.bind("<Leave>",
+                     lambda e, r=row: r.configure(bg=t["card"], fg=t["text"]))
+            row.bind("<Button-1>",
+                     lambda e, c=command: (win.destroy(), c()))
+
+        win.bind("<Escape>", lambda e: win.destroy())
+
+        # 화면 밖으로 나가지 않게 위치 보정
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = max(0, min(x, win.winfo_screenwidth() - w - 4))
+        y = max(0, min(y, win.winfo_screenheight() - h - 4))
+        win.geometry(f"+{x}+{y}")
+        win.focus_force()
+
+        # 다른 곳을 클릭하면(포커스 잃으면) 닫힘.
+        # 단, 띄운 직후엔 focus_force가 끝나기 전이라 잠깐 뒤에 연결.
+        def _arm() -> None:
+            try:
+                win.bind("<FocusOut>", lambda e: win.destroy())
+            except tk.TclError:
+                pass
+
+        win.after(60, _arm)
+
+
 class DashboardWidget:
     """항상 위에 떠 있는 대시보드 창 한 개."""
 
@@ -200,23 +269,19 @@ class DashboardWidget:
             w.bind("<B1-Motion>", self._on_drag)
             w.bind("<Button-3>", self._show_menu)
 
-        # 우클릭 메뉴
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="설정...", command=self._open_settings)
-        self.menu.add_command(label="새 프로젝트 만들기...",
-                              command=self._new_project)
-        self.menu.add_command(label="새로고침", command=self.refresh)
-        self.menu.add_command(label="테마 전환 (다크/라이트)", command=self._switch_theme)
+        # 우클릭 메뉴 (위젯 테마에 맞춘 다크 팝업)
+        self.menu = _PopupMenu(self.root, self.theme)
+        self.menu.add("설정...", self._open_settings)
+        self.menu.add("새 프로젝트 만들기...", self._new_project)
+        self.menu.add("새로고침", self.refresh)
+        self.menu.add("테마 전환 (다크/라이트)", self._switch_theme)
         self.menu.add_separator()
-        self.menu.add_command(label="설정 파일 열기 (config.json)",
-                              command=lambda: self._open_path(CONFIG_PATH))
-        self.menu.add_command(label="대시보드 폴더 열기",
-                              command=lambda: self._open_path(BASE_DIR))
+        self.menu.add("설정 파일 열기 (config.json)",
+                      lambda: self._open_path(CONFIG_PATH))
+        self.menu.add("대시보드 폴더 열기",
+                      lambda: self._open_path(BASE_DIR))
         self.menu.add_separator()
-        self.menu.add_command(label="종료", command=self._on_close)
-
-        # 프로젝트 카드 우클릭용 메뉴 (열 때마다 내용을 다시 채움)
-        self.proj_menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add("종료", self._on_close)
 
     def _icon_button(self, parent: tk.Frame, char: str, command,
                      tip: str = "", hover: str | None = None) -> tk.Label:
@@ -513,22 +578,21 @@ class DashboardWidget:
 
     def _show_project_menu(self, event, proj) -> None:
         """프로젝트 카드 우클릭 메뉴 — 접기 / 숨기기 / 파일 열기."""
-        m = self.proj_menu
-        m.delete(0, "end")
-        m.add_command(label="편집...",
-                      command=lambda: editor.open_project_editor(
-                          self.root, proj, self.theme, self.refresh))
-        m.add_command(label="펴기" if proj.collapsed else "접기",
-                      command=lambda: self._toggle_project_collapsed(proj))
-        m.add_command(label=f"'{proj.name}' 숨기기",
-                      command=lambda: self._toggle_project_hidden(proj))
+        m = _PopupMenu(self.root, self.theme)
+        m.add("편집...",
+              lambda: editor.open_project_editor(
+                  self.root, proj, self.theme, self.refresh))
+        m.add("펴기" if proj.collapsed else "접기",
+              lambda: self._toggle_project_collapsed(proj))
+        m.add(f"'{proj.name}' 숨기기",
+              lambda: self._toggle_project_hidden(proj))
         m.add_separator()
-        m.add_command(label="STATUS.md 열기",
-                      command=lambda: self._open_path(proj.status_path))
+        m.add("STATUS.md 열기",
+              lambda: self._open_path(proj.status_path))
         if proj.update_path is not None:
-            m.add_command(label="update.md 열기",
-                          command=lambda: self._open_path(proj.update_path))
-        m.tk_popup(event.x_root, event.y_root)
+            m.add("update.md 열기",
+                  lambda: self._open_path(proj.update_path))
+        m.popup(event.x_root, event.y_root)
 
     def _toggle_project_hidden(self, proj) -> None:
         """프로젝트 숨김 ↔ 표시를 전환하고 새로고침."""
@@ -646,7 +710,7 @@ class DashboardWidget:
         self._update_pin_icon()
 
     def _show_menu(self, event) -> None:
-        self.menu.tk_popup(event.x_root, event.y_root)
+        self.menu.popup(event.x_root, event.y_root)
 
     def _new_project(self) -> None:
         """제목줄 메뉴 — 새 프로젝트 만들기 창을 엶."""
