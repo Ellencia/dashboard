@@ -9,11 +9,42 @@ STATUS.md / update.md 를 텍스트로 직접 안 고치고 GUI로 다루기 위
 """
 from __future__ import annotations
 
+import ctypes
 import tkinter as tk
 
 import core
 
 FONT = "Malgun Gothic"
+
+
+def apply_dark_titlebar(window: tk.Toplevel | tk.Tk) -> None:
+    """창의 네이티브 제목 표시줄(헤더)을 다크색으로 칠함 (Windows 10/11).
+
+    tk.Toplevel은 운영체제가 그리는 흰 제목 표시줄을 갖는데, 위젯 다크
+    테마와 안 어울림. Windows의 DWM에 'immersive dark mode' 속성을 켜서
+    제목 표시줄을 검게 만듦. 구버전 윈도우 등에서 실패하면 조용히 넘어감.
+
+    update()로 창이 실제로 만들어진 뒤 속성을 켜고, 이미 흰색으로
+    그려진 제목 표시줄은 잠깐 숨겼다 다시 띄워 다크로 다시 그리게 함.
+    숨겼다 띄우면 위치가 좌상단으로 튀므로 원래 위치를 기억했다 복원함.
+    구버전 윈도우 등에서 실패하면 조용히 넘어감.
+    """
+    try:
+        window.update()   # 창과 제목 표시줄(HWND)이 완전히 만들어지도록
+        # tk의 winfo_id는 내부 창 → 제목 표시줄을 가진 건 그 부모 창
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (Windows 10 2004+ / 11)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(ctypes.c_int(1)),
+            ctypes.sizeof(ctypes.c_int))
+        # 이미 흰색으로 그려진 제목 표시줄을 다크로 다시 그리게 강제.
+        # 숨김→표시 과정에서 위치가 흐트러지므로 기억한 위치로 되돌림.
+        geo = window.geometry()           # "WxH+X+Y"
+        window.withdraw()
+        window.geometry(geo)              # 숨긴 채 원래 위치 지정
+        window.deiconify()                # 그 위치에 다크로 나타남
+    except Exception:
+        pass
 
 
 def _bind_wheel(widget: tk.Widget, canvas: tk.Canvas) -> None:
@@ -96,6 +127,7 @@ class _ProjectEditor:
         self.win.attributes("-topmost", True)
         self.win.geometry(
             f"+{parent_root.winfo_x() + 40}+{parent_root.winfo_y() + 30}")
+        apply_dark_titlebar(self.win)   # 제목 표시줄을 다크로
 
         pad = tk.Frame(self.win, bg=t["bg"])
         pad.pack(padx=14, pady=12)
@@ -259,6 +291,7 @@ def open_new_project(parent_root, root_dir, theme, on_change) -> None:
     win.resizable(False, False)
     win.attributes("-topmost", True)
     win.geometry(f"+{parent_root.winfo_x() + 50}+{parent_root.winfo_y() + 50}")
+    apply_dark_titlebar(win)   # 제목 표시줄을 다크로
 
     pad = tk.Frame(win, bg=t["bg"])
     pad.pack(padx=16, pady=14)

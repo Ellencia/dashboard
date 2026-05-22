@@ -756,6 +756,7 @@ class DashboardWidget:
         win.resizable(True, True)
         win.attributes("-topmost", True)
         win.geometry(f"+{self.root.winfo_x() + 30}+{self.root.winfo_y() + 30}")
+        editor.apply_dark_titlebar(win)   # 제목 표시줄을 다크로
 
         # 현재 설정값 (테마·체크박스는 아래에서 직접 관리)
         v_opacity = tk.IntVar(

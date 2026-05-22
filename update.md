@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 편집·새 프로젝트·설정 창의 네이티브 흰 제목 표시줄을 다크로 통일 — Windows DWM immersive dark mode 속성 적용 (editor.apply_dark_titlebar)
 - 우클릭 메뉴를 위젯 다크 테마에 맞춰 새로 그림 — 흰 네이티브 tk.Menu 대신 커스텀 _PopupMenu(다크 배경·강조색 호버·구분선)
 
 ## 2026-05-21
