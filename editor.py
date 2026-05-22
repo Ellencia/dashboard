@@ -26,8 +26,11 @@ def apply_dark_titlebar(window: tk.Toplevel | tk.Tk) -> None:
 
     update()로 창이 실제로 만들어진 뒤 속성을 켜고, 이미 흰색으로
     그려진 제목 표시줄은 잠깐 숨겼다 다시 띄워 다크로 다시 그리게 함.
-    숨겼다 띄우면 위치가 좌상단으로 튀므로 원래 위치를 기억했다 복원함.
-    구버전 윈도우 등에서 실패하면 조용히 넘어감.
+    숨겼다 띄우면 위치가 좌상단으로 튀므로 위치만 기억했다 복원함.
+    (크기는 고정하지 않음 — 내용에 맞춰 자동 조절되도록 둠.)
+
+    내용을 다 채운 뒤에 호출해야 함. 그래야 update()가 내용에 맞는
+    크기로 창을 잡음. 구버전 윈도우 등에서 실패하면 조용히 넘어감.
     """
     try:
         window.update()   # 창과 제목 표시줄(HWND)이 완전히 만들어지도록
@@ -38,11 +41,11 @@ def apply_dark_titlebar(window: tk.Toplevel | tk.Tk) -> None:
             hwnd, 20, ctypes.byref(ctypes.c_int(1)),
             ctypes.sizeof(ctypes.c_int))
         # 이미 흰색으로 그려진 제목 표시줄을 다크로 다시 그리게 강제.
-        # 숨김→표시 과정에서 위치가 흐트러지므로 기억한 위치로 되돌림.
-        geo = window.geometry()           # "WxH+X+Y"
+        # 숨김→표시 때 위치가 흐트러지므로 위치만 기억했다 되돌림.
+        x, y = window.winfo_x(), window.winfo_y()
         window.withdraw()
-        window.geometry(geo)              # 숨긴 채 원래 위치 지정
-        window.deiconify()                # 그 위치에 다크로 나타남
+        window.deiconify()
+        window.geometry(f"+{x}+{y}")       # 위치만 복원 (크기는 그대로)
     except Exception:
         pass
 
@@ -127,7 +130,6 @@ class _ProjectEditor:
         self.win.attributes("-topmost", True)
         self.win.geometry(
             f"+{parent_root.winfo_x() + 40}+{parent_root.winfo_y() + 30}")
-        apply_dark_titlebar(self.win)   # 제목 표시줄을 다크로
 
         pad = tk.Frame(self.win, bg=t["bg"])
         pad.pack(padx=14, pady=12)
@@ -186,6 +188,9 @@ class _ProjectEditor:
 
         _button(pad, t, "닫기", self.win.destroy).pack(anchor="e",
                                                       pady=(12, 0))
+
+        # 내용을 다 채운 뒤 제목 표시줄을 다크로 (크기가 잡힌 후라야 함)
+        apply_dark_titlebar(self.win)
 
     # ------------------------------------------------------------------
     def _field_row(self, parent, label, var, save_fn) -> None:
@@ -291,7 +296,6 @@ def open_new_project(parent_root, root_dir, theme, on_change) -> None:
     win.resizable(False, False)
     win.attributes("-topmost", True)
     win.geometry(f"+{parent_root.winfo_x() + 50}+{parent_root.winfo_y() + 50}")
-    apply_dark_titlebar(win)   # 제목 표시줄을 다크로
 
     pad = tk.Frame(win, bg=t["bg"])
     pad.pack(padx=16, pady=14)
@@ -337,3 +341,7 @@ def open_new_project(parent_root, root_dir, theme, on_change) -> None:
     _button(btns, t, "만들기", create, accent=True).pack(side="right",
                                                        padx=(6, 0))
     _button(btns, t, "취소", win.destroy).pack(side="right")
+
+    # 내용을 다 채운 뒤 제목 표시줄을 다크로 (크기가 잡힌 후라야 함)
+    apply_dark_titlebar(win)
+    ent.focus_set()   # 숨김→표시 뒤 입력칸에 다시 포커스

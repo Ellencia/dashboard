@@ -756,7 +756,6 @@ class DashboardWidget:
         win.resizable(True, True)
         win.attributes("-topmost", True)
         win.geometry(f"+{self.root.winfo_x() + 30}+{self.root.winfo_y() + 30}")
-        editor.apply_dark_titlebar(win)   # 제목 표시줄을 다크로
 
         # 현재 설정값 (테마·체크박스는 아래에서 직접 관리)
         v_opacity = tk.IntVar(
@@ -888,6 +887,9 @@ class DashboardWidget:
         # 내용이 다 보이는 자연 크기를 최소 크기로 잡음 (그보다 크게 조절 가능)
         win.update_idletasks()
         win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
+
+        # 내용을 다 채운 뒤 제목 표시줄을 다크로 (크기가 잡힌 후라야 함)
+        editor.apply_dark_titlebar(win)
 
     def _open_path(self, path) -> None:
         """파일이나 폴더를 윈도우 기본 프로그램으로 엶."""
