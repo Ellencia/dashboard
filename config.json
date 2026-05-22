@@ -4,20 +4,21 @@
   "auto_discover": true,
   "scan_depth": 4,
   "exclude": [],
-  "hidden": [],
+  "hidden": [
+    "Ecount_statics"
+  ],
   "collapsed": [
     "firefox-download-sorter",
-    "dashboard",
     "PPS",
     "Ecount_statics",
     "MCP-cad",
-    "buyflow"
+    "dashboard"
   ],
   "refresh_seconds": 30,
   "display_mode": "tray",
   "widget": {
-    "x": 384,
-    "y": 48,
+    "x": 1124,
+    "y": 159,
     "width": 355,
     "opacity": 0.91,
     "theme": "dark",
@@ -25,6 +26,7 @@
     "max_todos": 12,
     "todos_collapsed": false,
     "collapse_highlight": true,
-    "collapse_hotkey": "ctrl+alt+d"
+    "collapse_hotkey": "ctrl+alt+d",
+    "hide_hotkey": "ctrl+alt+s"
   }
 }

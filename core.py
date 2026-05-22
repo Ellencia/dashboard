@@ -105,7 +105,7 @@ DEFAULT_CONFIG = {
     "collapsed": [],
     # 몇 초마다 파일을 다시 읽어 화면을 갱신할지
     "refresh_seconds": 30,
-    # 표시 모드: "widget"(구현됨) / "wallpaper" / "tray"(추후)
+    # 표시 모드: "widget"(항상 위 위젯 창) 또는 "tray"(트레이 아이콘)
     "display_mode": "widget",
     # 위젯 모드 전용 설정
     "widget": {
@@ -118,7 +118,8 @@ DEFAULT_CONFIG = {
         "max_todos": 12,      # 할 일 목록에 한 번에 보여줄 최대 개수
         "todos_collapsed": False,  # 할 일 목록을 접어 뒀는지
         "collapse_highlight": True,  # 접었을 때 제목 막대를 강조색으로
-        "collapse_hotkey": "ctrl+alt+d",  # 보드 접기/펴기 전역 단축키 (빈 값=끔)
+        "collapse_hotkey": "ctrl+alt+d",  # 접기/펴기 전역 단축키 (빈 값=끔)
+        "hide_hotkey": "ctrl+alt+s",      # 닫기/열기 전역 단축키 (빈 값=끔)
     },
 }
 
@@ -500,6 +501,13 @@ def add_update_entry(update_path: Path, text: str) -> None:
                 lines.append("")
             lines.extend(block)
     _write_lines(update_path, lines)
+
+
+def safe_folder_name(name: str) -> str:
+    """프로젝트 이름을 폴더 이름으로 쓸 수 있게 정리 (윈도우 금지 문자 제거)."""
+    bad = set('\\/:*?"<>|')
+    cleaned = "".join(c for c in name if c not in bad)
+    return cleaned.strip().rstrip(". ")   # 끝의 마침표·공백은 윈도우에서 불가
 
 
 def create_project(parent: Path, folder_name: str, display_name: str) -> Path:

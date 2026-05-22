@@ -251,57 +251,56 @@ def open_project_editor(parent_root, project, theme, on_change) -> None:
 
 
 def open_new_project(parent_root, root_dir, theme, on_change) -> None:
-    """새 프로젝트 만들기 창을 엶 (폴더 + STATUS.md / update.md 생성)."""
+    """새 프로젝트 창 — 이름만 입력하면 폴더·STATUS.md·update.md를 자동 생성."""
     t = theme
     win = tk.Toplevel(parent_root)
-    win.title("새 프로젝트 만들기")
+    win.title("새 프로젝트")
     win.configure(bg=t["bg"])
     win.resizable(False, False)
     win.attributes("-topmost", True)
     win.geometry(f"+{parent_root.winfo_x() + 50}+{parent_root.winfo_y() + 50}")
 
     pad = tk.Frame(win, bg=t["bg"])
-    pad.pack(padx=14, pady=12)
+    pad.pack(padx=16, pady=14)
 
-    v_folder = tk.StringVar(value="my-project")
-    v_name = tk.StringVar(value="새 프로젝트")
-
-    def row(label, var):
-        r = tk.Frame(pad, bg=t["bg"])
-        r.pack(fill="x", pady=3)
-        tk.Label(r, text=label, bg=t["bg"], fg=t["subtext"], font=(FONT, 9),
-                 width=9, anchor="w").pack(side="left")
-        _entry(r, t, var, 28).pack(side="left", fill="x", expand=True)
-
-    row("폴더 경로", v_folder)
-    tk.Label(pad, text=f"{root_dir} 아래에 생성. 하위 폴더는 'projects/이름' 처럼.",
+    tk.Label(pad, text="새 프로젝트 이름", bg=t["bg"], fg=t["text"],
+             font=(FONT, 10, "bold"), anchor="w").pack(fill="x")
+    v_name = tk.StringVar()
+    ent = _entry(pad, t, v_name, 24)
+    ent.pack(fill="x", pady=(6, 3))
+    ent.focus_set()
+    tk.Label(pad, text="이름만 적으면 폴더와 STATUS.md·update.md를 자동으로 만듭니다.",
              bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
              anchor="w").pack(fill="x")
-    row("표시 이름", v_name)
 
     msg = tk.Label(pad, text="", bg=t["bg"], fg="#f7768e", font=(FONT, 8),
                    anchor="w")
     msg.pack(fill="x", pady=(4, 0))
 
-    def create():
-        folder = v_folder.get().strip().strip("/\\")
-        display = v_name.get().strip() or folder
+    def create(_e=None) -> None:
+        name = v_name.get().strip()
+        if not name:
+            msg.configure(text="프로젝트 이름을 입력하세요")
+            return
+        folder = core.safe_folder_name(name)
         if not folder:
-            msg.configure(text="폴더 경로를 입력하세요")
+            msg.configure(text="이름에 쓸 수 있는 글자가 없습니다")
             return
         if (root_dir / folder).exists():
-            msg.configure(text="이미 존재하는 폴더입니다")
+            msg.configure(text="같은 이름의 프로젝트가 이미 있습니다")
             return
         try:
-            core.create_project(root_dir, folder, display)
+            core.create_project(root_dir, folder, name)
         except OSError as e:
             msg.configure(text=f"생성 실패: {e}")
             return
         on_change()
         win.destroy()
 
+    ent.bind("<Return>", create)
+
     btns = tk.Frame(pad, bg=t["bg"])
-    btns.pack(fill="x", pady=(10, 0))
+    btns.pack(fill="x", pady=(12, 0))
     _button(btns, t, "만들기", create, accent=True).pack(side="right",
                                                        padx=(6, 0))
     _button(btns, t, "취소", win.destroy).pack(side="right")

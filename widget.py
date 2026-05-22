@@ -33,6 +33,7 @@ from core import (
 )
 from hotkey import GlobalHotkey
 import editor
+import singleton
 
 FONT = "Malgun Gothic"   # 윈도우 기본 한글 폰트
 TITLEBAR_H = 34          # 제목 표시줄 높이(px)
@@ -108,7 +109,7 @@ class _Tooltip:
 class DashboardWidget:
     """항상 위에 떠 있는 대시보드 창 한 개."""
 
-    def __init__(self) -> None:
+    def __init__(self, show_q=None) -> None:
         self.cfg = load_config()
         self.wcfg = self.cfg["widget"]
         theme_name = self.wcfg.get("theme", "dark")
@@ -120,12 +121,14 @@ class DashboardWidget:
         self.hidden_expanded = False  # 맨 아래 '숨김' 목록 펼침 상태
         self._after_id: str | None = None
         self._hotkey_after: str | None = None
+        self._show_q = show_q   # 중복 실행 시 '띄우기' 신호 큐 (없으면 None)
         self._settings_win: tk.Toplevel | None = None
         self._icon_buttons: list[tk.Label] = []
         # 설정 시 ✕가 종료 대신 이 콜백을 호출 (트레이 모드에서 '숨기기'로 씀)
         self.on_close_override = None
-        # 전역 단축키가 눌렸을 때 실행할 동작 (None이면 보드 접기/펴기)
-        self.hotkey_action = None
+        # 닫기/열기 단축키의 동작 (None이면 위젯 창 자체를 숨김/표시)
+        self.hide_action = None
+        self._window_hidden = False   # 닫기/열기로 창을 숨긴 상태인지
         # 제목 표시줄의 현재 색 (접힘 색 강조 시 바뀜)
         self._titlebar_bg = self.theme["titlebar"]
         self._titlebar_fg = self.theme["subtext"]
@@ -153,9 +156,14 @@ class DashboardWidget:
 
         # 전역 단축키 (보드 접기/펴기). 눌리면 큐에 신호 → poll이 처리
         self._hotkey_q: queue.Queue = queue.Queue()
-        self._hotkey = GlobalHotkey(self.wcfg.get("collapse_hotkey", ""),
-                                    lambda: self._hotkey_q.put(1))
-        self._hotkey.start()
+        self._hotkey_collapse = GlobalHotkey(
+            self.wcfg.get("collapse_hotkey", ""),
+            lambda: self._hotkey_q.put("collapse"))
+        self._hotkey_hide = GlobalHotkey(
+            self.wcfg.get("hide_hotkey", ""),
+            lambda: self._hotkey_q.put("hide"))
+        self._hotkey_collapse.start()
+        self._hotkey_hide.start()
         self._hotkey_after = self.root.after(120, self._hotkey_poll)
 
     # ------------------------------------------------------------------
@@ -283,20 +291,30 @@ class DashboardWidget:
     def _draw_empty(self) -> None:
         t = self.theme
         msg = (
-            "추적할 STATUS.md 파일을 찾지 못함.\n\n"
-            "각 프로젝트 폴더에 STATUS.md 를 만들고\n"
-            "체크리스트를 적으면 여기에 표시됨.\n\n"
-            "(STATUS_TEMPLATE.md 참고)"
+            "아직 표시할 프로젝트가 없음.\n\n"
+            "아래 버튼으로 새 프로젝트를 만들거나,\n"
+            "프로젝트 폴더에 STATUS.md 를 두면 자동으로 잡힘."
         )
         tk.Label(self.body, text=msg, bg=t["bg"], fg=t["subtext"],
-                 font=(FONT, 9), justify="left").pack(padx=14, pady=20)
+                 font=(FONT, 9), justify="left").pack(padx=14, pady=(20, 10))
+        btn = tk.Label(self.body, text="+ 새 프로젝트 만들기", bg=t["accent"],
+                       fg="#ffffff", font=(FONT, 9, "bold"), cursor="hand2",
+                       padx=10, pady=4)
+        btn.pack(pady=(0, 16))
+        btn.bind("<Button-1>", lambda e: self._new_project())
 
     def _draw_summary(self, projects: list) -> None:
         t = self.theme
         todo_count = sum(len(p.todos) for p in projects)
+        row = tk.Frame(self.body, bg=t["bg"])
+        row.pack(fill="x", padx=12, pady=(8, 2))
         text = f"프로젝트 {len(projects)}개 · 남은 할 일 {todo_count}개"
-        tk.Label(self.body, text=text, bg=t["bg"], fg=t["subtext"],
-                 font=(FONT, 8), anchor="w").pack(fill="x", padx=12, pady=(8, 2))
+        tk.Label(row, text=text, bg=t["bg"], fg=t["subtext"],
+                 font=(FONT, 8), anchor="w").pack(side="left")
+        add = tk.Label(row, text="+ 새 프로젝트", bg=t["bg"], fg=t["accent"],
+                       font=(FONT, 8, "bold"), cursor="hand2")
+        add.pack(side="right")
+        add.bind("<Button-1>", lambda e: self._new_project())
 
     def _draw_project_card(self, proj) -> None:
         t = self.theme
@@ -544,14 +562,43 @@ class DashboardWidget:
         self.root.geometry(f"{self.width}x{TITLEBAR_H + view_h}")
 
     def _hotkey_poll(self) -> None:
-        """전역 단축키가 눌렸으면(큐에 신호) 보드 접기/펴기를 실행."""
+        """전역 단축키·중복실행 신호를 받아 처리 (큐 → tkinter 스레드)."""
         try:
             while True:
-                self._hotkey_q.get_nowait()
-                (self.hotkey_action or self._toggle_collapse)()
+                cmd = self._hotkey_q.get_nowait()
+                if cmd == "collapse":
+                    self._toggle_collapse()
+                elif cmd == "hide":
+                    (self.hide_action or self._toggle_window_hidden)()
         except queue.Empty:
             pass
+        if self._show_q is not None:
+            try:
+                while True:
+                    self._show_q.get_nowait()
+                    self._show_self()
+            except queue.Empty:
+                pass
         self._hotkey_after = self.root.after(120, self._hotkey_poll)
+
+    def _show_self(self) -> None:
+        """다른 인스턴스가 '띄우기'를 요청 → 위젯을 보이게 함 (재실행 = 소환)."""
+        self.root.deiconify()
+        if self.collapsed:
+            self._toggle_collapse()
+        self.root.lift()
+        self._window_hidden = False
+
+    def _toggle_window_hidden(self) -> None:
+        """닫기/열기 — 위젯 창 자체를 숨기거나 다시 보이게 함 (위젯 모드 기본)."""
+        if self._window_hidden:
+            self.root.deiconify()
+            self.root.lift()
+            self._window_hidden = False
+        else:
+            self._save_geometry()
+            self.root.withdraw()
+            self._window_hidden = True
 
     def _on_wheel(self, event) -> None:
         self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
@@ -653,6 +700,7 @@ class DashboardWidget:
         v_maxtodos = tk.IntVar(value=int(self.wcfg.get("max_todos", 12)))
         v_refresh = tk.IntVar(value=int(self.cfg.get("refresh_seconds", 30)))
         v_hotkey = tk.StringVar(value=self.wcfg.get("collapse_hotkey", ""))
+        v_hide_hotkey = tk.StringVar(value=self.wcfg.get("hide_hotkey", ""))
 
         pad = tk.Frame(win, bg=t["bg"])
         pad.pack(fill="both", expand=True, padx=14, pady=12)
@@ -722,12 +770,16 @@ class DashboardWidget:
                    width=6, bg=t["card"], fg=t["text"],
                    buttonbackground=t["card"], relief="flat").pack(side="left")
 
-        # 보드 접기 단축키 (전역)
-        r = add_row("보드 접기 단축키")
+        # 전역 단축키 — 접기/펴기와 닫기/열기를 따로 지정
+        r = add_row("접기/펴기 단축키")
         tk.Entry(r, textvariable=v_hotkey, width=20, bg=t["card"],
                  fg=t["text"], insertbackground=t["text"], relief="flat",
                  font=(FONT, 9)).pack(side="left")
-        tk.Label(pad, text="예: ctrl+alt+d  ·  ctrl+shift+f9  ·  비우면 단축키 끔",
+        r = add_row("닫기/열기 단축키")
+        tk.Entry(r, textvariable=v_hide_hotkey, width=20, bg=t["card"],
+                 fg=t["text"], insertbackground=t["text"], relief="flat",
+                 font=(FONT, 9)).pack(side="left")
+        tk.Label(pad, text="접기=내용만 접음 · 닫기=창을 숨김. 예: ctrl+alt+d · 비우면 끔",
                  bg=t["bg"], fg=t["subtext"], font=(FONT, 8)).pack(
             anchor="w", pady=(2, 0))
 
@@ -753,6 +805,7 @@ class DashboardWidget:
             w["width"] = int(v_width.get())
             w["max_todos"] = maxtodos
             w["collapse_hotkey"] = v_hotkey.get().strip()
+            w["hide_hotkey"] = v_hide_hotkey.get().strip()
             save_config(disk)
             win.destroy()
             self.restart = True          # 새 설정으로 창을 다시 띄움
@@ -805,17 +858,24 @@ class DashboardWidget:
         self._destroy()
 
     def _destroy(self) -> None:
-        self._hotkey.stop()
+        self._hotkey_collapse.stop()
+        self._hotkey_hide.stop()
         for aid in (self._after_id, self._hotkey_after):
             if aid is not None:
                 self.root.after_cancel(aid)
         self.root.destroy()
 
 
-def run_widget() -> None:
-    """위젯을 실행. 테마 전환 시 창을 새로 만들어 다시 띄움."""
+def run_widget(ipc_server=None) -> None:
+    """위젯을 실행. 테마 전환 시 창을 새로 만들어 다시 띄움.
+
+    ipc_server: 단일 실행 잠금 소켓. 다른 인스턴스가 신호하면 위젯을 띄움.
+    """
+    show_q: queue.Queue = queue.Queue()
+    if ipc_server is not None:
+        singleton.watch(ipc_server, lambda: show_q.put(1))
     while True:
-        app = DashboardWidget()
+        app = DashboardWidget(show_q=show_q)
         app.root.mainloop()
         if not app.restart:
             break

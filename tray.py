@@ -42,10 +42,18 @@ def _make_icon_image(percent: int) -> Image.Image:
     return img
 
 
-def run_tray() -> None:
-    """트레이 모드 실행 — 트레이 아이콘 + 클릭 시 위젯 팝업."""
+def run_tray(ipc_server=None) -> None:
+    """트레이 모드 실행 — 트레이 아이콘 + 클릭 시 위젯 팝업.
+
+    ipc_server: 단일 실행 잠금 소켓. 다른 인스턴스가 신호하면 팝업을 띄움.
+    """
     # 트레이 스레드가 보낸 명령을 tkinter 스레드가 꺼내 처리하기 위한 큐
     cmd_q: queue.Queue[str] = queue.Queue()
+
+    # 중복 실행 감지 — 다른 인스턴스가 뜨면 이 인스턴스의 팝업을 띄움
+    if ipc_server is not None:
+        import singleton
+        singleton.watch(ipc_server, lambda: cmd_q.put("show"))
     state = {"visible": False}   # 팝업이 현재 보이는 중인지
 
     percent, title = _summary()
@@ -75,8 +83,8 @@ def run_tray() -> None:
         app = DashboardWidget()
         # 트레이 모드에서 ✕는 종료가 아니라 트레이로 '숨기기'
         app.on_close_override = lambda: cmd_q.put("hide")
-        # 전역 단축키는 팝업 보이기/숨기기를 토글
-        app.hotkey_action = lambda: cmd_q.put("toggle")
+        # 닫기/열기 단축키는 팝업 보이기/숨기기를 토글
+        app.hide_action = lambda: cmd_q.put("toggle")
         if state["visible"]:
             app.root.deiconify()
         else:

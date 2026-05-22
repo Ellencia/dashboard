@@ -1,8 +1,7 @@
 """프로젝트 대시보드 진입점.
 
 config.json의 display_mode 값에 따라 표시 방식을 고름.
-"widget"(항상 위 위젯 창)과 "tray"(트레이 아이콘)가 구현돼 있고,
-"wallpaper"(바탕화면 배경 합성)는 추후 추가 예정.
+"widget"(항상 위 위젯 창)과 "tray"(트레이 아이콘) 두 가지가 있음.
 
 실행:
     python main.py        # 오류 메시지를 보고 싶을 때
@@ -13,16 +12,23 @@ from __future__ import annotations
 import sys
 import traceback
 
+import singleton
 from core import load_config
 
 
 def main() -> None:
+    # 중복 실행 방지 — 이미 떠 있으면 그 인스턴스를 띄우고 조용히 종료
+    ipc = singleton.acquire()
+    if ipc is None:
+        print("대시보드가 이미 실행 중입니다 — 기존 창을 띄웠습니다.")
+        return
+
     cfg = load_config()
     mode = cfg.get("display_mode", "widget")
 
     if mode == "widget":
         from widget import run_widget
-        run_widget()
+        run_widget(ipc)
     elif mode == "tray":
         try:
             from tray import run_tray
@@ -31,14 +37,14 @@ def main() -> None:
             print("트레이 모드에는 pystray·pillow가 필요함: "
                   f"pip install pystray pillow\n({e})")
             from widget import run_widget
-            run_widget()
+            run_widget(ipc)
         else:
-            run_tray()
+            run_tray(ipc)
     elif mode == "wallpaper":
-        # 아직 미구현 — 위젯 모드로 대체 실행
-        print("'wallpaper' 모드는 아직 준비 중임. 위젯 모드로 실행함.")
+        # 'wallpaper' 모드는 계획 취소 — 옛 설정값이면 위젯 모드로 대체
+        print("'wallpaper' 모드는 지원하지 않음. 위젯 모드로 실행함.")
         from widget import run_widget
-        run_widget()
+        run_widget(ipc)
     else:
         print(f"알 수 없는 display_mode: {mode!r}  (widget / tray / wallpaper 중 하나)")
         sys.exit(1)
