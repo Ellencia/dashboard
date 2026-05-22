@@ -12,7 +12,15 @@
     "PPS",
     "Ecount_statics",
     "MCP-cad",
-    "dashboard"
+    "dashboard",
+    "buyflow"
+  ],
+  "project_order": [
+    "buyflow",
+    "dashboard",
+    "PPS",
+    "MCP-cad",
+    "firefox-download-sorter"
   ],
   "refresh_seconds": 30,
   "display_mode": "tray",

@@ -25,8 +25,10 @@ from core import (
     BASE_DIR,
     CONFIG_PATH,
     load_config,
+    reorder_items,
     save_config,
     scan_projects,
+    set_project_order,
     toggle_collapsed,
     toggle_hidden,
     toggle_item,
@@ -173,6 +175,116 @@ class _PopupMenu:
                 pass
 
         win.after(60, _arm)
+
+
+class _DragReorder:
+    """세로로 쌓인 행들을 '드래그 핸들'로 끌어 순서를 바꾸는 기능.
+
+    한 '그룹'(예: 프로젝트 카드들, 또는 한 프로젝트의 할 일들) 안에서만
+    순서가 바뀜. 다른 그룹으로는 넘어가지 못함 — 그룹마다 _DragReorder를
+    따로 만들기 때문. 드래그가 끝나면 on_reorder(새 순서 리스트)를 호출함.
+
+    사용법:
+        drag = _DragReorder(body, theme)
+        drag.add_row(handle_widget, row_widget, payload)   # 행마다
+        drag.on_reorder = lambda new_payloads: ...
+    body: 좌표 기준이자 삽입 표시선을 올릴 컨테이너 (스크롤 캔버스 안의 프레임).
+    """
+
+    def __init__(self, body: tk.Frame, theme: dict) -> None:
+        self.body = body
+        self.theme = theme
+        self.rows: list = []            # [(row_widget, payload)] — 표시 순서대로
+        self.on_reorder = None
+        self._line: tk.Frame | None = None   # 삽입 위치 표시선
+        self._drag_row = None
+        self._start_y = 0
+        self._dragging = False
+
+    def add_row(self, handle: tk.Widget, row: tk.Widget, payload) -> None:
+        """드래그 가능한 행 하나를 등록 (handle을 잡고 끌면 row가 움직임)."""
+        self.rows.append((row, payload))
+        handle.bind("<Button-1>", lambda e, r=row: self._press(e, r))
+        handle.bind("<B1-Motion>", self._motion)
+        handle.bind("<ButtonRelease-1>", self._release)
+
+    # ---- 내부 동작 ----
+    def _press(self, event, row) -> None:
+        self._drag_row = row
+        self._start_y = event.y_root
+        self._dragging = False
+
+    def _motion(self, event) -> None:
+        if self._drag_row is None:
+            return
+        if not self._dragging:
+            # 5px 미만으로 움직인 건 드래그로 안 봄 (손 떨림 무시)
+            if abs(event.y_root - self._start_y) < 5:
+                return
+            self._dragging = True
+        try:
+            self._show_line(self._target_index(event.y_root))
+        except tk.TclError:
+            pass   # 드래그 도중 새로고침으로 위젯이 사라진 경우
+
+    def _release(self, event) -> None:
+        target = None
+        if self._drag_row is not None and self._dragging:
+            try:
+                target = self._target_index(event.y_root)
+            except tk.TclError:
+                target = None
+        self._clear_line()   # 새로고침으로 body가 지워지기 전에 먼저 정리
+        if target is not None:
+            self._drop(target)
+        self._drag_row = None
+        self._dragging = False
+
+    def _target_index(self, y_root: int) -> int:
+        """마우스 y가 몇 번째 자리인지 (0 ~ 행 개수)."""
+        body_y = y_root - self.body.winfo_rooty()
+        idx = 0
+        for row, _ in self.rows:
+            if body_y > row.winfo_y() + row.winfo_height() / 2:
+                idx += 1
+        return idx
+
+    def _gap_y(self, index: int) -> int:
+        """index번째 자리(행과 행 사이)의 y좌표."""
+        if index < len(self.rows):
+            return self.rows[index][0].winfo_y()
+        last = self.rows[-1][0]
+        return last.winfo_y() + last.winfo_height()
+
+    def _show_line(self, index: int) -> None:
+        """삽입될 위치에 강조색 가로선을 표시."""
+        if self._line is None:
+            self._line = tk.Frame(self.body, bg=self.theme["accent"], height=2)
+        self._line.place(x=10, y=max(0, self._gap_y(index) - 1),
+                         width=max(1, self.body.winfo_width() - 20))
+        self._line.lift()
+
+    def _clear_line(self) -> None:
+        if self._line is not None:
+            try:
+                self._line.destroy()
+            except tk.TclError:
+                pass
+            self._line = None
+
+    def _drop(self, target: int) -> None:
+        """드래그한 행을 target 자리로 옮긴 새 순서를 on_reorder로 알림."""
+        order = [payload for _, payload in self.rows]
+        orig = next(i for i, (row, _) in enumerate(self.rows)
+                    if row is self._drag_row)
+        if target > orig:
+            target -= 1   # 자기 자신을 빼고 나면 뒤쪽 인덱스가 하나 당겨짐
+        if target == orig:
+            return        # 제자리면 아무것도 안 함
+        item = order.pop(orig)
+        order.insert(target, item)
+        if self.on_reorder is not None:
+            self.on_reorder(order)
 
 
 class DashboardWidget:
@@ -333,6 +445,9 @@ class DashboardWidget:
         # 기존 내용 제거
         for child in self.body.winfo_children():
             child.destroy()
+        # 드래그 관리자는 새로고침마다 새로 만듦 (옛 위젯 참조를 버림)
+        self._card_drag = None
+        self._todo_drags = []
 
         projects = scan_projects(self.cfg)
         visible = [p for p in projects if not p.hidden]
@@ -345,8 +460,13 @@ class DashboardWidget:
             self._draw_all_hidden()
         else:
             self._draw_summary(visible)
+            # 카드들을 그리며 드래그 그룹에 등록 → 카드끼리 순서 변경 가능
+            card_drag = _DragReorder(self.body, self.theme)
             for proj in visible:
-                self._draw_project_card(proj)
+                card, handle = self._draw_project_card(proj)
+                card_drag.add_row(handle, card, proj)
+            card_drag.on_reorder = self._reorder_projects
+            self._card_drag = card_drag
             self._draw_todos(visible)
 
         self._draw_hidden_section(hidden)
@@ -381,16 +501,29 @@ class DashboardWidget:
         add.pack(side="right")
         add.bind("<Button-1>", lambda e: self._new_project())
 
-    def _draw_project_card(self, proj) -> None:
+    def _drag_handle(self, parent: tk.Widget, bg: str) -> tk.Label:
+        """드래그용 손잡이 라벨(↕). 잡고 위아래로 끌면 순서가 바뀜."""
+        t = self.theme
+        h = tk.Label(parent, text="↕", bg=bg, fg=t["subtext"],
+                     font=(FONT, 9), cursor="fleur")
+        h.bind("<Enter>", lambda e: h.configure(fg=t["accent"]))
+        h.bind("<Leave>", lambda e: h.configure(fg=t["subtext"]))
+        _Tooltip(h, "드래그해서 순서 바꾸기")
+        return h
+
+    def _draw_project_card(self, proj) -> tuple[tk.Frame, tk.Label]:
+        """프로젝트 카드 한 개를 그림. (카드 프레임, 드래그 핸들)을 반환."""
         t = self.theme
         card = tk.Frame(self.body, bg=t["card"])
         card.pack(fill="x", padx=8, pady=4)
         inner = tk.Frame(card, bg=t["card"])
         inner.pack(fill="x", padx=10, pady=8)
 
-        # 윗줄: [접기 화살표] 이름(클릭 시 STATUS.md 열기) + 퍼센트
+        # 윗줄: [드래그 핸들] [접기 화살표] 이름(클릭 시 STATUS.md 열기) + 퍼센트
         top = tk.Frame(inner, bg=t["card"])
         top.pack(fill="x")
+        handle = self._drag_handle(top, t["card"])
+        handle.pack(side="left", padx=(0, 4))
         chev = tk.Label(top, text="▸" if proj.collapsed else "▾",
                         bg=t["card"], fg=t["subtext"], font=(FONT, 9),
                         cursor="hand2")
@@ -436,6 +569,7 @@ class DashboardWidget:
         # 카드 어디서든 우클릭 → 프로젝트 메뉴 (숨기기 / 파일 열기)
         self._bind_tree(card, "<Button-3>",
                         lambda e, p=proj: self._show_project_menu(e, p))
+        return card, handle
 
     def _draw_progress_bar(self, parent: tk.Frame, percent: int) -> None:
         t = self.theme
@@ -452,9 +586,11 @@ class DashboardWidget:
 
     def _draw_todos(self, projects: list) -> None:
         t = self.theme
-        # 접힌 카드의 프로젝트는 할 일 목록에서도 제외 (카드와 함께 접힘)
-        pairs = [(p, it) for p in projects if not p.collapsed for it in p.todos]
+        # 접힌 카드의 프로젝트는 할 일 목록에서도 제외 (카드와 함께 접힘).
+        # active = 펼쳐져 있고 남은 할 일이 있는 프로젝트들 (카드 순서 그대로).
+        active = [p for p in projects if not p.collapsed and p.todos]
         collapsed_todos = sum(len(p.todos) for p in projects if p.collapsed)
+        total = sum(len(p.todos) for p in active)
 
         # 구분선
         tk.Frame(self.body, bg=t["bar_bg"], height=1).pack(
@@ -463,7 +599,7 @@ class DashboardWidget:
         # 헤더 (클릭하면 할 일 목록 전체 접기/펴기)
         collapsed = bool(self.wcfg.get("todos_collapsed", False))
         arrow = "▸" if collapsed else "▾"
-        count = str(len(pairs))
+        count = str(total)
         if collapsed_todos:
             count += f"  (접힌 카드 {collapsed_todos}개)"
         header = tk.Label(self.body, text=f"{arrow} 📋 할 일   {count}",
@@ -475,7 +611,7 @@ class DashboardWidget:
         if collapsed:
             return  # 할 일 목록 전체가 접혀 있으면 생략
 
-        if not pairs:
+        if not active:
             if collapsed_todos:
                 msg = "접힌 카드의 할 일만 있음 — 카드를 펴서 확인"
             else:
@@ -484,36 +620,59 @@ class DashboardWidget:
                      font=(FONT, 9)).pack(padx=14, pady=6)
             return
 
+        # 프로젝트별로 묶어서 그림. 각 묶음은 자기만의 _DragReorder를 가져
+        # 드래그 순서 변경이 같은 프로젝트 안에서만 일어남 (밖으로 못 나감).
         max_todos = int(self.wcfg.get("max_todos", 12))
-        for proj, item in pairs[:max_todos]:
-            self._draw_todo_row(proj, item)
+        shown = 0
+        for proj in active:
+            if shown >= max_todos:
+                break
+            self._draw_todo_group_header(proj)
+            drag = _DragReorder(self.body, t)
+            for item in proj.todos:
+                if shown >= max_todos:
+                    break
+                handle, row = self._draw_todo_row(proj, item)
+                drag.add_row(handle, row, item)
+                shown += 1
+            drag.on_reorder = (
+                lambda new_items, p=proj: self._reorder_todos(p, new_items))
+            self._todo_drags.append(drag)
 
-        overflow = len(pairs) - max_todos
+        overflow = total - shown
         if overflow > 0:
             tk.Label(self.body, text=f"…외 {overflow}개 (STATUS.md에서 확인)",
                      bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
 
-    def _draw_todo_row(self, proj, item) -> None:
+    def _draw_todo_group_header(self, proj) -> None:
+        """할 일 목록 안에서 한 프로젝트 묶음의 소제목."""
         t = self.theme
-        row = tk.Frame(self.body, bg=t["bg"], cursor="hand2")
+        tk.Label(self.body, text=f"— {proj.name}", bg=t["bg"], fg=t["accent"],
+                 font=(FONT, 8, "bold"), anchor="w").pack(
+            fill="x", padx=14, pady=(6, 1))
+
+    def _draw_todo_row(self, proj, item) -> tuple[tk.Label, tk.Frame]:
+        """할 일 한 줄을 그림. (드래그 핸들, 줄 프레임)을 반환."""
+        t = self.theme
+        row = tk.Frame(self.body, bg=t["bg"])
         row.pack(fill="x", padx=10, pady=1)
 
+        handle = self._drag_handle(row, t["bg"])
+        handle.pack(side="left", padx=(0, 2))
         box = tk.Label(row, text="☐", bg=t["bg"], fg=t["subtext"],
-                       font=(FONT, 11))
+                       font=(FONT, 11), cursor="hand2")
         box.pack(side="left")
-        tag = tk.Label(row, text=proj.folder.name, bg=t["bg"], fg=t["accent"],
-                       font=(FONT, 7))
-        tag.pack(side="right", padx=(4, 0))
         txt = tk.Label(row, text=item.text, bg=t["bg"], fg=t["text"],
                        font=(FONT, 9), anchor="w", justify="left",
-                       wraplength=self.width - 100)
+                       cursor="hand2", wraplength=self.width - 80)
         txt.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        # 줄 어디를 눌러도 완료 처리되도록 모든 자식에 같은 핸들러 연결
-        for w in (row, box, txt, tag):
+        # 핸들을 뺀 나머지를 누르면 완료 처리 (핸들은 드래그 전용)
+        for w in (row, box, txt):
             w.bind("<Button-1>",
                    lambda e, p=proj, it=item: self._on_todo_click(p, it))
+        return handle, row
 
     def _bind_tree(self, widget: tk.Widget, sequence: str, handler) -> None:
         """위젯과 그 안의 모든 하위 위젯에 같은 이벤트 핸들러를 연결."""
@@ -602,6 +761,27 @@ class DashboardWidget:
     def _toggle_project_collapsed(self, proj) -> None:
         """프로젝트 카드 접기 ↔ 펴기를 전환하고 새로고침."""
         toggle_collapsed(self.cfg, proj.folder.name)
+        self.refresh()
+
+    def _reorder_projects(self, new_projects: list) -> None:
+        """카드를 드래그해 바뀐 프로젝트 순서를 config.json에 저장하고 새로고침."""
+        set_project_order(self.cfg, [p.folder.name for p in new_projects])
+        self.refresh()
+
+    def _reorder_todos(self, proj, new_items: list) -> None:
+        """한 프로젝트의 할 일을 드래그해 바뀐 순서대로 STATUS.md에 저장.
+
+        new_items: 화면에 보이던 (미완료) 할 일들의 새 순서.
+        max_todos로 잘려 화면에 없던 할 일은 원래 순서대로 뒤에 붙임.
+        완료된 항목은 STATUS.md 안에서 자리를 그대로 지킴.
+        """
+        ordered = [it.text for it in new_items]
+        shown = set(ordered)
+        ordered += [it.text for it in proj.todos if it.text not in shown]
+        texts = iter(ordered)
+        # 완료 항목은 자기 텍스트, 미완료 항목 자리엔 새 순서를 차례로 채움
+        full = [it.text if it.done else next(texts) for it in proj.items]
+        reorder_items(proj.status_path, full)
         self.refresh()
 
     def _toggle_hidden_expand(self) -> None:

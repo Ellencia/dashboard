@@ -103,6 +103,8 @@ DEFAULT_CONFIG = {
     "hidden": [],
     # 위젯에서 카드를 접어 둔 프로젝트들의 폴더 이름 목록
     "collapsed": [],
+    # 카드를 드래그해 정한 프로젝트 표시 순서 (폴더 이름 목록)
+    "project_order": [],
     # 몇 초마다 파일을 다시 읽어 화면을 갱신할지
     "refresh_seconds": 30,
     # 표시 모드: "widget"(항상 위 위젯 창) 또는 "tray"(트레이 아이콘)
@@ -313,6 +315,12 @@ def scan_projects(cfg: dict) -> list[Project]:
             proj.hidden = proj.folder.name in hidden_names
             proj.collapsed = proj.folder.name in collapsed_names
             projects.append(proj)
+
+    # 사용자가 카드 드래그로 정한 순서대로 정렬.
+    # project_order에 없는 새 프로젝트는 맨 뒤로 (정렬이 안정적이라 발견 순서 유지).
+    order = cfg.get("project_order", [])
+    rank = {name: i for i, name in enumerate(order)}
+    projects.sort(key=lambda p: rank.get(p.folder.name, len(order)))
     return projects
 
 
@@ -348,6 +356,18 @@ def toggle_collapsed(cfg: dict, folder_name: str) -> bool:
     new_state, items = _toggle_in_config_list("collapsed", folder_name)
     cfg["collapsed"] = items
     return new_state
+
+
+def set_project_order(cfg: dict, folder_names: list[str]) -> None:
+    """프로젝트 표시 순서(폴더 이름 목록)를 config.json에 저장.
+
+    저장 직전 디스크 config를 다시 읽으므로 다른 항목은 덮어쓰지 않음.
+    호출한 쪽(위젯)의 cfg 메모리 상태도 함께 맞춰 줌.
+    """
+    disk = load_config()
+    disk["project_order"] = list(folder_names)
+    save_config(disk)
+    cfg["project_order"] = list(folder_names)
 
 
 def toggle_item(item: TodoItem, status_path: Path) -> None:
@@ -464,6 +484,31 @@ def set_item_done(status_path: Path, text: str, done: bool) -> None:
         if m and m.group(2) == text:
             lines[i] = f"- [{mark}] {text}"
             break
+    _write_lines(status_path, lines)
+
+
+def reorder_items(status_path: Path, ordered_texts: list[str]) -> None:
+    """STATUS.md의 체크박스 줄들을 ordered_texts 순서대로 재배치.
+
+    체크박스가 아닌 줄(제목·메모·빈 줄 등)의 위치는 그대로 두고,
+    체크박스 줄들이 있던 자리에만 새 순서로 다시 채움.
+    ordered_texts에 없는 체크박스 줄은 원래 순서대로 맨 뒤에 둠
+    (드래그 도중 다른 편집이 겹쳐도 줄이 사라지지 않게 하는 안전장치).
+    """
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    check_idx = [i for i, l in enumerate(lines) if _CHECK_RE.match(l)]
+    remaining = [lines[i] for i in check_idx]   # 아직 배치 안 한 체크박스 줄
+
+    ordered: list[str] = []
+    for text in ordered_texts:
+        for j, line in enumerate(remaining):
+            if _CHECK_RE.match(line).group(2) == text:
+                ordered.append(remaining.pop(j))
+                break
+    ordered.extend(remaining)   # 목록에 없던 줄은 원래 순서로 뒤에
+
+    for slot, line in zip(check_idx, ordered):
+        lines[slot] = line
     _write_lines(status_path, lines)
 
 
