@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- install_autostart 수정 — venv 자동 탐색(현재 실행 중인 pythonw → 주변 venv 재귀 탐색 → PATH) 및 동작 검증(pystray·pillow import) 추가. pythonw가 exit code를 셸에 안 돌려주는 문제를 같은 폴더 python.exe로 우회
 - 프로젝트 카드·할 일을 드래그(↕ 핸들)로 순서 변경 — 카드 순서는 config.json, 할 일 순서는 STATUS.md에 영구 저장
 - 할 일 목록을 프로젝트별로 묶어 표시 — 할 일 드래그는 같은 프로젝트 묶음 안에서만 가능 (밖으로 못 나감)
 - 편집·새 프로젝트·설정 창의 네이티브 흰 제목 표시줄을 다크로 통일 — Windows DWM immersive dark mode 속성 적용 (editor.apply_dark_titlebar)
