@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import re
 import queue
 import tkinter as tk
 from datetime import datetime
@@ -39,6 +40,18 @@ import singleton
 
 FONT = "Malgun Gothic"   # 윈도우 기본 한글 폰트
 TITLEBAR_H = 34          # 제목 표시줄 높이(px)
+
+# 할 일 텍스트에서 #태그 부분(앞 공백 포함)을 떼어 표시용 글자만 남기는 정규식
+_TAG_STRIP_RE = re.compile(r"\s*#\w+")
+
+# 같은 태그는 항상 같은 색이 되도록 결정적으로 매핑하는 작은 팔레트
+_TAG_PALETTE = ["#7aa2f7", "#9ece6a", "#e0af68", "#f7768e",
+                "#bb9af7", "#7dcfff", "#ff9e64", "#73daca"]
+
+
+def _tag_color_default(tag: str) -> str:
+    """태그 문자열의 해시값으로 팔레트의 한 색을 골라줌 (같은 태그=같은 색)."""
+    return _TAG_PALETTE[hash(tag) % len(_TAG_PALETTE)]
 
 # 색상 테마 (다크 / 라이트)
 THEMES = {
@@ -309,6 +322,8 @@ class DashboardWidget:
         # 깜빡임 방지: 마지막으로 그린 내용의 지문 — 같으면 redraw 건너뜀
         self._last_draw_fp = None
         self._footer_label: tk.Label | None = None
+        # 활성 태그 필터 — 칩 클릭 시 그 태그의 할 일만 표시
+        self._tag_filter: str | None = None
         # 설정 시 ✕가 종료 대신 이 콜백을 호출 (트레이 모드에서 '숨기기'로 씀)
         self.on_close_override = None
         # 닫기/열기 단축키의 동작 (None이면 위젯 창 자체를 숨김/표시)
@@ -578,6 +593,23 @@ class DashboardWidget:
         add.pack(side="right")
         add.bind("<Button-1>", lambda e: self._new_project())
 
+    def _tag_color(self, tag: str) -> str:
+        """태그 색 — 사용자 설정이 있으면 그걸, 없으면 해시 팔레트."""
+        custom = self.wcfg.get("tag_colors") or {}
+        return custom.get(tag) or _tag_color_default(tag)
+
+    def _toggle_tag_filter(self, tag: str) -> None:
+        """태그 칩 클릭 — 같은 태그면 필터 해제, 다른 태그면 그걸로 전환."""
+        self._tag_filter = None if self._tag_filter == tag else tag
+        self._last_draw_fp = None   # 필터 바뀌면 강제 redraw
+        self.refresh()
+
+    def _clear_tag_filter(self) -> None:
+        """필터 배너의 ✕ — 필터 해제."""
+        self._tag_filter = None
+        self._last_draw_fp = None
+        self.refresh()
+
     def _drag_handle(self, parent: tk.Widget, bg: str) -> tk.Label:
         """드래그용 손잡이 라벨(↕). 잡고 위아래로 끌면 순서가 바뀜."""
         t = self.theme
@@ -667,7 +699,13 @@ class DashboardWidget:
         # active = 펼쳐져 있고 남은 할 일이 있는 프로젝트들 (카드 순서 그대로).
         active = [p for p in projects if not p.collapsed and p.todos]
         collapsed_todos = sum(len(p.todos) for p in projects if p.collapsed)
-        total = sum(len(p.todos) for p in active)
+        flt = self._tag_filter
+        # 필터 활성 시 각 프로젝트 todos를 그 태그만 남기고 추림
+        def todos_for(p):
+            return [it for it in p.todos if flt is None or flt in it.tags]
+        active_filtered = [(p, todos_for(p)) for p in active]
+        active_filtered = [(p, ts) for p, ts in active_filtered if ts]
+        total = sum(len(ts) for _, ts in active_filtered)
 
         # 구분선
         tk.Frame(self.body, bg=t["bar_bg"], height=1).pack(
@@ -677,6 +715,8 @@ class DashboardWidget:
         collapsed = bool(self.wcfg.get("todos_collapsed", False))
         arrow = "▸" if collapsed else "▾"
         count = str(total)
+        if flt:
+            count += f"  (#{flt} 필터)"
         if collapsed_todos:
             count += f"  (접힌 카드 {collapsed_todos}개)"
         header = tk.Label(self.body, text=f"{arrow} 📋 할 일   {count}",
@@ -685,11 +725,29 @@ class DashboardWidget:
         header.pack(fill="x", padx=12, pady=(8, 4))
         header.bind("<Button-1>", lambda e: self._toggle_todos_collapsed())
 
+        # 필터 배너 — 활성 시 헤더 아래에 표시 (✕로 해제)
+        if flt:
+            banner = tk.Frame(self.body, bg=t["bg"])
+            banner.pack(fill="x", padx=14, pady=(0, 4))
+            tk.Label(banner, text="필터:", bg=t["bg"], fg=t["subtext"],
+                     font=(FONT, 8)).pack(side="left")
+            chip = tk.Label(banner, text=f"#{flt}", bg=self._tag_color(flt),
+                            fg="#1e1e2e", font=(FONT, 8, "bold"), padx=5,
+                            cursor="hand2")
+            chip.pack(side="left", padx=(4, 4))
+            chip.bind("<Button-1>", lambda e: self._clear_tag_filter())
+            x = tk.Label(banner, text="✕ 해제", bg=t["bg"], fg=t["accent"],
+                         font=(FONT, 8, "bold"), cursor="hand2")
+            x.pack(side="left")
+            x.bind("<Button-1>", lambda e: self._clear_tag_filter())
+
         if collapsed:
             return  # 할 일 목록 전체가 접혀 있으면 생략
 
-        if not active:
-            if collapsed_todos:
+        if not active_filtered:
+            if flt:
+                msg = f"'#{flt}' 태그를 가진 할 일이 없음"
+            elif collapsed_todos:
                 msg = "접힌 카드의 할 일만 있음 — 카드를 펴서 확인"
             else:
                 msg = "모든 할 일 완료! 🎉"
@@ -722,12 +780,12 @@ class DashboardWidget:
         # 드래그 순서 변경이 같은 프로젝트 안에서만 일어남 (밖으로 못 나감).
         max_todos = int(self.wcfg.get("max_todos", 12))
         shown = 0
-        for proj in active:
+        for proj, todos_in_proj in active_filtered:
             if shown >= max_todos:
                 break
             self._draw_todo_group_header(inner_frame, proj)
             drag = _DragReorder(inner_frame, t)
-            for item in proj.todos:
+            for item in todos_in_proj:
                 if shown >= max_todos:
                     break
                 handle, row = self._draw_todo_row(inner_frame, proj, item)
@@ -751,15 +809,39 @@ class DashboardWidget:
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
 
     def _draw_todo_group_header(self, parent: tk.Widget, proj) -> None:
-        """할 일 목록 안에서 한 프로젝트 묶음의 소제목."""
+        """할 일 목록 안에서 한 프로젝트 묶음의 소제목 + 태그별 개수 칩.
+
+        칩 클릭 시 그 태그로 필터됨 → 묶음 간 빠른 카테고리 전환.
+        카운트는 필터와 무관하게 그 프로젝트 전체 미완료 기준 (다른 태그가
+        어떤 게 있는지도 보여 줌).
+        """
         t = self.theme
-        tk.Label(parent, text=f"— {proj.name}", bg=t["bg"], fg=t["accent"],
-                 font=(FONT, 8, "bold"), anchor="w").pack(
-            fill="x", padx=14, pady=(6, 1))
+        row = tk.Frame(parent, bg=t["bg"])
+        row.pack(fill="x", padx=14, pady=(6, 1))
+        tk.Label(row, text=f"— {proj.name}", bg=t["bg"], fg=t["accent"],
+                 font=(FONT, 8, "bold"), anchor="w").pack(side="left")
+
+        # 미완료 할 일들에서 태그별 개수 모음 (순서: 등장 순)
+        counts: dict[str, int] = {}
+        for it in proj.todos:
+            for tag in it.tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        for tag, c in counts.items():
+            label = f"#{tag}·{c}"
+            chip = tk.Label(row, text=label, bg=self._tag_color(tag),
+                            fg="#1e1e2e", font=(FONT, 7, "bold"), padx=3,
+                            cursor="hand2")
+            chip.pack(side="left", padx=(3, 0))
+            chip.bind("<Button-1>",
+                      lambda e, tg=tag: self._toggle_tag_filter(tg))
 
     def _draw_todo_row(self, parent: tk.Widget, proj,
                        item) -> tuple[tk.Label, tk.Frame]:
-        """할 일 한 줄을 그림. (드래그 핸들, 줄 프레임)을 반환."""
+        """할 일 한 줄을 그림. (드래그 핸들, 줄 프레임)을 반환.
+
+        텍스트 안의 #태그 들은 떼어서 오른쪽 끝에 색 칩으로 표시.
+        같은 태그는 항상 같은 색이라 한눈에 카테고리 구분이 됨.
+        """
         t = self.theme
         row = tk.Frame(parent, bg=t["bg"])
         row.pack(fill="x", padx=10, pady=1)
@@ -769,15 +851,35 @@ class DashboardWidget:
         box = tk.Label(row, text="☐", bg=t["bg"], fg=t["subtext"],
                        font=(FONT, 11), cursor="hand2")
         box.pack(side="left")
-        txt = tk.Label(row, text=item.text, bg=t["bg"], fg=t["text"],
+
+        # 태그 칩을 오른쪽에 배치. side="right"은 마지막 pack이 가장 오른쪽이 되므로
+        # 원문 순서를 시각적으로도 유지하려면 reversed로 거꾸로 pack.
+        chips: list[tk.Label] = []
+        for tag in reversed(item.tags):
+            chip = tk.Label(row, text=f"#{tag}", bg=self._tag_color(tag),
+                            fg="#1e1e2e", font=(FONT, 7, "bold"), padx=4,
+                            cursor="hand2")
+            chip.pack(side="right", padx=(3, 0))
+            chips.append(chip)
+
+        # 표시용 텍스트 — #태그 부분 제거, 공백 정리. 빈 문자열이 되면 원본 사용
+        display = _TAG_STRIP_RE.sub("", item.text)
+        display = re.sub(r"\s+", " ", display).strip() or item.text
+        # 칩이 차지할 가로폭을 대략 빼 wraplength 잡기 (태그 1개당 ~35px 추정)
+        chip_room = 35 * len(item.tags)
+        txt = tk.Label(row, text=display, bg=t["bg"], fg=t["text"],
                        font=(FONT, 9), anchor="w", justify="left",
-                       cursor="hand2", wraplength=self.width - 80)
+                       cursor="hand2",
+                       wraplength=max(80, self.width - 80 - chip_room))
         txt.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        # 핸들을 뺀 나머지를 누르면 완료 처리 (핸들은 드래그 전용)
+        # 핸들과 칩을 뺀 나머지를 누르면 완료 처리. 칩 클릭은 그 태그로 필터링
         for w in (row, box, txt):
             w.bind("<Button-1>",
                    lambda e, p=proj, it=item: self._on_todo_click(p, it))
+        for chip, tag in zip(chips, reversed(item.tags)):
+            chip.bind("<Button-1>",
+                      lambda e, tg=tag: self._toggle_tag_filter(tg))
         return handle, row
 
     def _bind_tree(self, widget: tk.Widget, sequence: str, handler) -> None:
@@ -863,6 +965,8 @@ class DashboardWidget:
             int(self.wcfg.get("todos_max_height", 240)),
             bool(self.hidden_expanded),
             int(self.width),
+            self._tag_filter or "",
+            tuple(sorted((self.wcfg.get("tag_colors") or {}).items())),
         )
         return (proj_part, cfg_part)
 
@@ -1181,6 +1285,81 @@ class DashboardWidget:
                  highlightthickness=0, length=150, resolution=20).pack(
             side="left")
 
+        # 태그별 색 지정 — 빈 매핑이면 해시 팔레트로 자동 할당, 지정한 태그만 고정
+        tag_color_state: dict = dict(self.wcfg.get("tag_colors") or {})
+        tag_rows_holder: list[tuple[tk.StringVar, tk.StringVar]] = []
+        tag_section = tk.Frame(pad, bg=t["bg"])
+        tag_section.pack(fill="x", pady=(6, 0))
+        tk.Label(tag_section, text="태그 색 (지정 안 한 태그는 자동 색)",
+                 bg=t["bg"], fg=t["text"], font=(FONT, 9, "bold"),
+                 anchor="w").pack(fill="x")
+        tag_list_frame = tk.Frame(tag_section, bg=t["bg"])
+        tag_list_frame.pack(fill="x", pady=(2, 0))
+
+        def render_tag_rows() -> None:
+            for child in tag_list_frame.winfo_children():
+                child.destroy()
+            tag_rows_holder.clear()
+            for tag_name, color in tag_color_state.items():
+                row = tk.Frame(tag_list_frame, bg=t["bg"])
+                row.pack(fill="x", pady=1)
+                v_tag = tk.StringVar(value=tag_name)
+                v_color = tk.StringVar(value=color)
+                tag_rows_holder.append((v_tag, v_color))
+                tk.Label(row, text="#", bg=t["bg"], fg=t["subtext"],
+                         font=(FONT, 9)).pack(side="left")
+                tk.Entry(row, textvariable=v_tag, width=10, bg=t["card"],
+                         fg=t["text"], insertbackground=t["text"],
+                         relief="flat", font=(FONT, 9)).pack(side="left")
+                swatch = tk.Label(row, text="    ", bg=color, cursor="hand2")
+                swatch.pack(side="left", padx=(6, 0))
+
+                def pick(_e=None, s=swatch, v=v_color):
+                    from tkinter import colorchooser
+                    chosen = colorchooser.askcolor(
+                        initialcolor=v.get(), parent=win)
+                    if chosen and chosen[1]:
+                        v.set(chosen[1])
+                        s.configure(bg=chosen[1])
+
+                swatch.bind("<Button-1>", pick)
+
+                def remove(_e=None, name=tag_name):
+                    tag_color_state.pop(name, None)
+                    # 현재 입력값을 임시 보존 (사용자가 막 바꾼 게 있으면)
+                    fresh = {v_t.get().strip().lstrip("#"): v_c.get()
+                             for v_t, v_c in tag_rows_holder
+                             if v_t.get().strip().lstrip("#") != name
+                             and v_t.get().strip().lstrip("#")}
+                    tag_color_state.clear()
+                    tag_color_state.update(fresh)
+                    render_tag_rows()
+
+                tk.Label(row, text="✕", bg=t["bg"], fg=t["subtext"],
+                         font=(FONT, 9), cursor="hand2").pack(
+                    side="left", padx=(6, 0))
+                row.winfo_children()[-1].bind("<Button-1>", remove)
+
+        def add_tag_color() -> None:
+            # 현재 입력값 보존 + 새 항목 추가
+            fresh = {v_t.get().strip().lstrip("#"): v_c.get()
+                     for v_t, v_c in tag_rows_holder
+                     if v_t.get().strip().lstrip("#")}
+            i = 1
+            while f"태그{i}" in fresh:
+                i += 1
+            fresh[f"태그{i}"] = _tag_color_default(f"태그{i}")
+            tag_color_state.clear()
+            tag_color_state.update(fresh)
+            render_tag_rows()
+
+        render_tag_rows()
+        add_btn = tk.Label(tag_section, text="+ 태그 색 추가", bg=t["bg"],
+                           fg=t["accent"], font=(FONT, 8, "bold"),
+                           cursor="hand2")
+        add_btn.pack(anchor="w", pady=(3, 0))
+        add_btn.bind("<Button-1>", lambda e: add_tag_color())
+
         # 새로고침 주기
         r = add_row("새로고침 (초)")
         tk.Spinbox(r, from_=5, to=600, increment=5, textvariable=v_refresh,
@@ -1223,6 +1402,14 @@ class DashboardWidget:
             w["width"] = int(v_width.get())
             w["max_todos"] = maxtodos
             w["todos_max_height"] = todos_h
+            # 태그 색 매핑 — 입력칸의 현재 값들로 다시 모음 (빈 태그·빈 색 제외)
+            tag_colors_final = {}
+            for v_t, v_c in tag_rows_holder:
+                tag = v_t.get().strip().lstrip("#")
+                color = v_c.get().strip()
+                if tag and color:
+                    tag_colors_final[tag] = color
+            w["tag_colors"] = tag_colors_final
             w["collapse_hotkey"] = v_hotkey.get().strip()
             w["hide_hotkey"] = v_hide_hotkey.get().strip()
             save_config(disk)

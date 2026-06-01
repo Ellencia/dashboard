@@ -35,6 +35,9 @@ UPDATE_FILENAME = "update.md"
 # 그룹1 = 체크 표시(공백/x/X), 그룹2 = 항목 텍스트
 _CHECK_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*(.+?)\s*$")
 
+# 할 일 안의 #태그 — "#발주", "#자재", "#abc" 등. \w는 유니코드라 한글도 OK.
+_TAG_RE = re.compile(r"#(\w+)")
+
 # update.md 파싱용 정규식
 _HEADING2_RE = re.compile(r"^##\s+(.+?)\s*$")            # "## 제목"
 _DATE_RE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}")  # 2026-05-20 등
@@ -45,10 +48,11 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")          # "- 내용"
 class TodoItem:
     """STATUS.md의 체크박스 한 줄."""
 
-    text: str
+    text: str             # 태그 포함 원본 텍스트 (파일 매칭용)
     done: bool
     line_no: int          # STATUS.md 안에서 몇 번째 줄인지 (0부터 시작)
     project_name: str     # 어느 프로젝트에 속한 항목인지
+    tags: list[str] = field(default_factory=list)   # text 안 #태그 들 (순서대로)
 
 
 @dataclass
@@ -120,6 +124,7 @@ DEFAULT_CONFIG = {
         "topmost": True,      # 항상 다른 창 위에 표시
         "max_todos": 12,      # 할 일 목록에 한 번에 보여줄 최대 개수
         "todos_max_height": 240,   # 할 일 목록 영역 최대 높이(px) — 넘으면 스크롤
+        "tag_colors": {},     # 사용자가 지정한 태그→hex색 매핑 (없으면 해시 팔레트)
         "todos_collapsed": False,  # 할 일 목록을 접어 뒀는지
         "collapse_highlight": True,  # 접었을 때 제목 막대를 강조색으로
         "collapse_hotkey": "ctrl+alt+d",  # 접기/펴기 전역 단축키 (빈 값=끔)
@@ -157,12 +162,14 @@ def _parse_status(path: Path, project_name: str) -> tuple[str, list[TodoItem]]:
     for line_no, line in enumerate(lines):
         m = _CHECK_RE.match(line)
         if m:
+            text = m.group(2)
             items.append(
                 TodoItem(
-                    text=m.group(2),
+                    text=text,
                     done=m.group(1).lower() == "x",
                     line_no=line_no,
                     project_name=project_name,
+                    tags=_TAG_RE.findall(text),
                 )
             )
         elif not note and line.startswith(">"):
