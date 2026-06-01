@@ -1130,6 +1130,10 @@ class DashboardWidget:
             self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-1, y=-1)
             self.resize_grip.lift()
             self._apply_titlebar_style()
+            # 펴기 시점에 데이터가 안 바뀌었으면 refresh가 skip 경로로 빠져
+            # _resize_to_content가 호출되지 않아 창이 짜부라진 채로 남음.
+            # 명시적으로 크기를 복원한 뒤 refresh를 부름.
+            self._resize_to_content()
             self.refresh()
         else:
             self.collapsed = True
