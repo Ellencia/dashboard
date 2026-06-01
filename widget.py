@@ -482,6 +482,8 @@ class DashboardWidget:
         # 자식들이 새 너비로 wrap 되도록 캔버스 안 본문 너비도 갱신
         self.width = new_w
         self.canvas.itemconfigure(self._body_id, width=new_w)
+        # 할 일 영역도 함께 늘려 라이브 미리보기
+        self._fit_todo_canvas_to_available(new_h - TITLEBAR_H)
 
     def _end_resize(self, event) -> None:
         """리사이즈 종료 — 새 크기를 저장하고 다시 그림 (텍스트 줄바꿈 재계산)."""
@@ -778,15 +780,17 @@ class DashboardWidget:
 
         # 프로젝트별로 묶어서 그림. 각 묶음은 자기만의 _DragReorder를 가져
         # 드래그 순서 변경이 같은 프로젝트 안에서만 일어남 (밖으로 못 나감).
-        max_todos = int(self.wcfg.get("max_todos", 12))
+        # max_todos = 0 (또는 음수) → 무제한 (스크롤 영역에서 다 보여 줌).
+        max_todos = int(self.wcfg.get("max_todos", 0))
+        unlimited = max_todos <= 0
         shown = 0
         for proj, todos_in_proj in active_filtered:
-            if shown >= max_todos:
+            if not unlimited and shown >= max_todos:
                 break
             self._draw_todo_group_header(inner_frame, proj)
             drag = _DragReorder(inner_frame, t)
             for item in todos_in_proj:
-                if shown >= max_todos:
+                if not unlimited and shown >= max_todos:
                     break
                 handle, row = self._draw_todo_row(inner_frame, proj, item)
                 drag.add_row(handle, row, item)
@@ -801,9 +805,9 @@ class DashboardWidget:
         content_h = inner_frame.winfo_reqheight()
         inner_canvas.configure(height=min(content_h, max_h))
 
-        # 오버플로 안내는 스크롤 영역 밖(항상 보이는 자리)에 둠
+        # 오버플로 안내는 스크롤 영역 밖(항상 보이는 자리)에 둠 (cap 켰을 때만)
         overflow = total - shown
-        if overflow > 0:
+        if not unlimited and overflow > 0:
             tk.Label(self.body, text=f"…외 {overflow}개 (STATUS.md에서 확인)",
                      bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
@@ -1045,6 +1049,7 @@ class DashboardWidget:
         wcfg["height"] = 0 (기본): 내용 높이에 맞춰 자동 크기 (화면 -160px 상한).
         wcfg["height"] > 0      : 사용자가 그립으로 정한 크기를 그대로 사용
                                   (내용이 더 작으면 빈 공간, 크면 본문이 스크롤).
+        사용자가 정한 크기일 땐 할 일 스크롤 영역도 가용 공간만큼 늘림.
         """
         self.body.update_idletasks()
         user_h = int(self.wcfg.get("height", 0))
@@ -1056,6 +1061,37 @@ class DashboardWidget:
             view_h = max(60, min(content_h, max_h))
         self.canvas.configure(height=view_h)
         self.root.geometry(f"{self.width}x{TITLEBAR_H + view_h}")
+        # 사용자 지정 크기에서만 할 일 영역을 늘림 (자동 모드는 기존 동작 유지)
+        if user_h > 0:
+            self._fit_todo_canvas_to_available(view_h)
+
+    def _fit_todo_canvas_to_available(self, view_h: int) -> None:
+        """할 일 스크롤 영역 높이를 본문 가용 공간에 맞춤.
+
+        본문 전체 reqheight에서 현재 할 일 캔버스 높이를 뺀 게 'chrome'(다른
+        모든 요소가 차지하는 높이). view_h에서 chrome을 빼면 할 일 영역에
+        쓸 수 있는 가용 높이가 나옴. 내용보다 크게는 안 키워(빈 공간 방지).
+
+        주의: update_idletasks()는 호출하지 않음 — 드래그 중 모션마다 호출
+        하면 동기 재페인트로 깜빡임/체크박스 사라짐 현상이 발생함. winfo 값이
+        한 프레임 stale해도 다음 모션에서 보정되므로 무방.
+        """
+        if self._todo_canvas is None or not self._todo_canvas.winfo_exists():
+            return
+        inner_h_now = self._todo_canvas.winfo_height()
+        chrome_h = self.body.winfo_reqheight() - inner_h_now
+        available = max(60, view_h - chrome_h)
+        # 할 일 내용 자체 자연 높이는 scrollregion에서 추출
+        sr = self._todo_canvas.cget("scrollregion") or ""
+        try:
+            _, _, _, sr_h = (float(x) for x in sr.split())
+            content_h = int(sr_h)
+        except ValueError:
+            content_h = inner_h_now
+        new_h = min(content_h, available)
+        # 작은 변화는 무시 — 매 모션 이벤트마다 configure 호출하지 않게 임계치 둠
+        if abs(new_h - inner_h_now) > 4:
+            self._todo_canvas.configure(height=new_h)
 
     def _hotkey_poll(self) -> None:
         """전역 단축키·중복실행 신호를 받아 처리 (큐 → tkinter 스레드)."""
@@ -1276,11 +1312,13 @@ class DashboardWidget:
                  bg=t["bg"], fg=t["text"], troughcolor=t["card"],
                  highlightthickness=0, length=150).pack(side="left")
 
-        # 할 일 최대 개수
-        r = add_row("할 일 최대 개수")
-        tk.Spinbox(r, from_=3, to=200, textvariable=v_maxtodos, width=6,
+        # 할 일 최대 개수 — 0이면 무제한 (스크롤 영역에서 다 보임)
+        r = add_row("할 일 표시 상한")
+        tk.Spinbox(r, from_=0, to=500, textvariable=v_maxtodos, width=6,
                    bg=t["card"], fg=t["text"], buttonbackground=t["card"],
                    relief="flat").pack(side="left")
+        tk.Label(r, text="  (0 = 무제한)", bg=t["bg"], fg=t["subtext"],
+                 font=(FONT, 8)).pack(side="left")
 
         # 할 일 영역 최대 높이 (이 높이를 넘으면 그 안에서 스크롤)
         r = add_row("할 일 영역 높이 (px)")
@@ -1390,7 +1428,7 @@ class DashboardWidget:
         def save() -> None:
             try:
                 refresh = max(5, min(3600, int(v_refresh.get())))
-                maxtodos = max(1, min(500, int(v_maxtodos.get())))
+                maxtodos = max(0, min(500, int(v_maxtodos.get())))
                 todos_h = max(80, min(1200, int(v_todos_h.get())))
             except (tk.TclError, ValueError):
                 return  # 숫자칸에 잘못된 값이 있으면 저장하지 않음

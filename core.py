@@ -122,7 +122,7 @@ DEFAULT_CONFIG = {
         "opacity": 0.96,      # 투명도 (0.0~1.0)
         "theme": "dark",      # "dark" 또는 "light"
         "topmost": True,      # 항상 다른 창 위에 표시
-        "max_todos": 12,      # 할 일 목록에 한 번에 보여줄 최대 개수
+        "max_todos": 0,       # 할 일 표시 최대 개수 (0 = 무제한, 스크롤로 모두 봄)
         "todos_max_height": 240,   # 할 일 목록 영역 최대 높이(px) — 넘으면 스크롤
         "tag_colors": {},     # 사용자가 지정한 태그→hex색 매핑 (없으면 해시 팔레트)
         "todos_collapsed": False,  # 할 일 목록을 접어 뒀는지
