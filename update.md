@@ -5,6 +5,8 @@
 
 ## 2026-05-22
 
+- 위젯 창 크기 조절 — 오른쪽 아래 ◢ 그립을 끌어서 너비·높이 동시 조절. 새 크기는 config.json에 영구 저장(`width`·`height`). `height=0`이면 지금처럼 내용에 맞춘 자동 크기
+- 할 일 목록에 자체 스크롤 추가 — 일정 높이(설정창 todos_max_height, 기본 240px)를 넘으면 그 안에서만 스크롤됨. 마우스 휠은 커서 위치에 따라 본문/할 일 영역으로 분기됨
 - install_autostart 수정 — venv 자동 탐색(현재 실행 중인 pythonw → 주변 venv 재귀 탐색 → PATH) 및 동작 검증(pystray·pillow import) 추가. pythonw가 exit code를 셸에 안 돌려주는 문제를 같은 폴더 python.exe로 우회
 - 프로젝트 카드·할 일을 드래그(↕ 핸들)로 순서 변경 — 카드 순서는 config.json, 할 일 순서는 STATUS.md에 영구 저장
 - 할 일 목록을 프로젝트별로 묶어 표시 — 할 일 드래그는 같은 프로젝트 묶음 안에서만 가능 (밖으로 못 나감)

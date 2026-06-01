@@ -305,6 +305,7 @@ class DashboardWidget:
         self._show_q = show_q   # 중복 실행 시 '띄우기' 신호 큐 (없으면 None)
         self._settings_win: tk.Toplevel | None = None
         self._icon_buttons: list[tk.Label] = []
+        self._todo_canvas: tk.Canvas | None = None   # 할 일 영역 내부 스크롤
         # 설정 시 ✕가 종료 대신 이 콜백을 호출 (트레이 모드에서 '숨기기'로 씀)
         self.on_close_override = None
         # 닫기/열기 단축키의 동작 (None이면 위젯 창 자체를 숨김/표시)
@@ -327,6 +328,7 @@ class DashboardWidget:
 
         self._build_titlebar()
         self._build_scroll_area()
+        self._build_resize_grip()
 
         # 마우스 휠로 스크롤
         self.root.bind_all("<MouseWheel>", self._on_wheel)
@@ -428,6 +430,49 @@ class DashboardWidget:
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
         )
 
+    def _build_resize_grip(self) -> None:
+        """오른쪽 아래 모서리에 크기 조절 손잡이 (◢).
+
+        overrideredirect 창이라 윈도우 기본 리사이즈 핸들이 없으므로 직접
+        둠. 잡고 끌면 너비·높이 모두 바뀌고, 손을 떼면 config.json에 저장됨.
+        """
+        t = self.theme
+        grip = tk.Label(self.root, text="◢", bg=t["bg"], fg=t["subtext"],
+                        font=(FONT, 9), cursor="size_nw_se")
+        grip.place(relx=1.0, rely=1.0, anchor="se", x=-1, y=-1)
+        grip.lift()
+        grip.bind("<Enter>", lambda e: grip.configure(fg=t["accent"]))
+        grip.bind("<Leave>", lambda e: grip.configure(fg=t["subtext"]))
+        grip.bind("<Button-1>", self._start_resize)
+        grip.bind("<B1-Motion>", self._on_resize)
+        grip.bind("<ButtonRelease-1>", self._end_resize)
+        _Tooltip(grip, "끌어서 위젯 크기 조절")
+        self.resize_grip = grip
+
+    def _start_resize(self, event) -> None:
+        self._resize_w0 = self.root.winfo_width()
+        self._resize_h0 = self.root.winfo_height()
+        self._resize_x0 = event.x_root
+        self._resize_y0 = event.y_root
+
+    def _on_resize(self, event) -> None:
+        """드래그 중 실시간으로 창 크기 갱신 (저장은 손을 뗀 뒤에)."""
+        new_w = max(240, self._resize_w0 + (event.x_root - self._resize_x0))
+        new_h = max(TITLEBAR_H + 60,
+                    self._resize_h0 + (event.y_root - self._resize_y0))
+        self.root.geometry(f"{new_w}x{new_h}")
+        # 자식들이 새 너비로 wrap 되도록 캔버스 안 본문 너비도 갱신
+        self.width = new_w
+        self.canvas.itemconfigure(self._body_id, width=new_w)
+
+    def _end_resize(self, event) -> None:
+        """리사이즈 종료 — 새 크기를 저장하고 다시 그림 (텍스트 줄바꿈 재계산)."""
+        self.width = self.root.winfo_width()
+        self.wcfg["width"] = self.width
+        self.wcfg["height"] = self.root.winfo_height()
+        self._save_config_safe()
+        self.refresh()
+
     # ------------------------------------------------------------------
     # 내용 그리기
     # ------------------------------------------------------------------
@@ -448,6 +493,7 @@ class DashboardWidget:
         # 드래그 관리자는 새로고침마다 새로 만듦 (옛 위젯 참조를 버림)
         self._card_drag = None
         self._todo_drags = []
+        self._todo_canvas = None   # 할 일 스크롤 캔버스 (다시 그릴 때 새로 생김)
 
         projects = scan_projects(self.cfg)
         visible = [p for p in projects if not p.hidden]
@@ -620,6 +666,27 @@ class DashboardWidget:
                      font=(FONT, 9)).pack(padx=14, pady=6)
             return
 
+        # 할 일 영역 전용 스크롤 캔버스 — 내용이 max 높이를 넘으면 여기서만 스크롤
+        # (카드 영역과 분리돼 위젯 전체가 길어지지 않음).
+        scroll_box = tk.Frame(self.body, bg=t["bg"])
+        scroll_box.pack(fill="x", padx=0, pady=0)
+        inner_canvas = tk.Canvas(scroll_box, bg=t["bg"], highlightthickness=0,
+                                 bd=0)
+        inner_canvas.pack(side="left", fill="x", expand=True)
+        inner_frame = tk.Frame(inner_canvas, bg=t["bg"])
+        win_id = inner_canvas.create_window((0, 0), window=inner_frame,
+                                            anchor="nw")
+
+        def _sync_scroll(_e=None) -> None:
+            inner_canvas.configure(scrollregion=inner_canvas.bbox("all"))
+
+        inner_frame.bind("<Configure>", _sync_scroll)
+        # 캔버스 너비가 정해지면 내부 프레임을 그 너비에 맞춤 (자식 wraplength 작동)
+        inner_canvas.bind(
+            "<Configure>",
+            lambda e: inner_canvas.itemconfigure(win_id, width=e.width))
+        self._todo_canvas = inner_canvas
+
         # 프로젝트별로 묶어서 그림. 각 묶음은 자기만의 _DragReorder를 가져
         # 드래그 순서 변경이 같은 프로젝트 안에서만 일어남 (밖으로 못 나감).
         max_todos = int(self.wcfg.get("max_todos", 12))
@@ -627,35 +694,43 @@ class DashboardWidget:
         for proj in active:
             if shown >= max_todos:
                 break
-            self._draw_todo_group_header(proj)
-            drag = _DragReorder(self.body, t)
+            self._draw_todo_group_header(inner_frame, proj)
+            drag = _DragReorder(inner_frame, t)
             for item in proj.todos:
                 if shown >= max_todos:
                     break
-                handle, row = self._draw_todo_row(proj, item)
+                handle, row = self._draw_todo_row(inner_frame, proj, item)
                 drag.add_row(handle, row, item)
                 shown += 1
             drag.on_reorder = (
                 lambda new_items, p=proj: self._reorder_todos(p, new_items))
             self._todo_drags.append(drag)
 
+        # 내용 높이에 맞춰 캔버스 높이 결정 (최대 todos_max_height 까지)
+        inner_frame.update_idletasks()
+        max_h = int(self.wcfg.get("todos_max_height", 240))
+        content_h = inner_frame.winfo_reqheight()
+        inner_canvas.configure(height=min(content_h, max_h))
+
+        # 오버플로 안내는 스크롤 영역 밖(항상 보이는 자리)에 둠
         overflow = total - shown
         if overflow > 0:
             tk.Label(self.body, text=f"…외 {overflow}개 (STATUS.md에서 확인)",
                      bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
 
-    def _draw_todo_group_header(self, proj) -> None:
+    def _draw_todo_group_header(self, parent: tk.Widget, proj) -> None:
         """할 일 목록 안에서 한 프로젝트 묶음의 소제목."""
         t = self.theme
-        tk.Label(self.body, text=f"— {proj.name}", bg=t["bg"], fg=t["accent"],
+        tk.Label(parent, text=f"— {proj.name}", bg=t["bg"], fg=t["accent"],
                  font=(FONT, 8, "bold"), anchor="w").pack(
             fill="x", padx=14, pady=(6, 1))
 
-    def _draw_todo_row(self, proj, item) -> tuple[tk.Label, tk.Frame]:
+    def _draw_todo_row(self, parent: tk.Widget, proj,
+                       item) -> tuple[tk.Label, tk.Frame]:
         """할 일 한 줄을 그림. (드래그 핸들, 줄 프레임)을 반환."""
         t = self.theme
-        row = tk.Frame(self.body, bg=t["bg"])
+        row = tk.Frame(parent, bg=t["bg"])
         row.pack(fill="x", padx=10, pady=1)
 
         handle = self._drag_handle(row, t["bg"])
@@ -797,11 +872,20 @@ class DashboardWidget:
         self.refresh()
 
     def _resize_to_content(self) -> None:
-        """내용 높이에 맞춰 창 크기를 조절 (화면 높이를 넘으면 스크롤)."""
+        """창 크기 결정 — 사용자가 정한 높이가 있으면 그걸 쓰고, 없으면 내용에 맞춤.
+
+        wcfg["height"] = 0 (기본): 내용 높이에 맞춰 자동 크기 (화면 -160px 상한).
+        wcfg["height"] > 0      : 사용자가 그립으로 정한 크기를 그대로 사용
+                                  (내용이 더 작으면 빈 공간, 크면 본문이 스크롤).
+        """
         self.body.update_idletasks()
-        content_h = self.body.winfo_reqheight()
-        max_h = self.root.winfo_screenheight() - 160
-        view_h = max(60, min(content_h, max_h))
+        user_h = int(self.wcfg.get("height", 0))
+        if user_h > 0:
+            view_h = max(60, user_h - TITLEBAR_H)
+        else:
+            content_h = self.body.winfo_reqheight()
+            max_h = self.root.winfo_screenheight() - 160
+            view_h = max(60, min(content_h, max_h))
         self.canvas.configure(height=view_h)
         self.root.geometry(f"{self.width}x{TITLEBAR_H + view_h}")
 
@@ -845,7 +929,21 @@ class DashboardWidget:
             self._window_hidden = True
 
     def _on_wheel(self, event) -> None:
-        self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        """마우스 휠 — 커서가 '할 일' 스크롤 영역 위면 그쪽을, 아니면 본문을 스크롤."""
+        delta = -1 if event.delta > 0 else 1
+        # 마우스 위치의 위젯에서 부모를 따라 올라가며 어느 캔버스에 속하는지 확인
+        w = self.root.winfo_containing(event.x_root, event.y_root)
+        while w is not None:
+            if w is self._todo_canvas:
+                self._todo_canvas.yview_scroll(delta, "units")
+                return
+            if w is self.canvas:
+                break
+            try:
+                w = w.master
+            except Exception:
+                break
+        self.canvas.yview_scroll(delta, "units")
 
     def _start_drag(self, event) -> None:
         self._drag_x = event.x
@@ -861,11 +959,14 @@ class DashboardWidget:
         if self.collapsed:
             self.collapsed = False
             self.canvas.pack(side="top", fill="both", expand=True)
+            self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-1, y=-1)
+            self.resize_grip.lift()
             self._apply_titlebar_style()
             self.refresh()
         else:
             self.collapsed = True
             self.canvas.pack_forget()
+            self.resize_grip.place_forget()
             self._apply_titlebar_style()
             self.root.geometry(f"{self.width}x{TITLEBAR_H}")
 
@@ -942,6 +1043,7 @@ class DashboardWidget:
             value=int(round(float(self.wcfg.get("opacity", 0.96)) * 100)))
         v_width = tk.IntVar(value=int(self.wcfg.get("width", 340)))
         v_maxtodos = tk.IntVar(value=int(self.wcfg.get("max_todos", 12)))
+        v_todos_h = tk.IntVar(value=int(self.wcfg.get("todos_max_height", 240)))
         v_refresh = tk.IntVar(value=int(self.cfg.get("refresh_seconds", 30)))
         v_hotkey = tk.StringVar(value=self.wcfg.get("collapse_hotkey", ""))
         v_hide_hotkey = tk.StringVar(value=self.wcfg.get("hide_hotkey", ""))
@@ -1004,9 +1106,16 @@ class DashboardWidget:
 
         # 할 일 최대 개수
         r = add_row("할 일 최대 개수")
-        tk.Spinbox(r, from_=3, to=40, textvariable=v_maxtodos, width=6,
+        tk.Spinbox(r, from_=3, to=200, textvariable=v_maxtodos, width=6,
                    bg=t["card"], fg=t["text"], buttonbackground=t["card"],
                    relief="flat").pack(side="left")
+
+        # 할 일 영역 최대 높이 (이 높이를 넘으면 그 안에서 스크롤)
+        r = add_row("할 일 영역 높이 (px)")
+        tk.Scale(r, from_=120, to=600, orient="horizontal", variable=v_todos_h,
+                 bg=t["bg"], fg=t["text"], troughcolor=t["card"],
+                 highlightthickness=0, length=150, resolution=20).pack(
+            side="left")
 
         # 새로고침 주기
         r = add_row("새로고침 (초)")
@@ -1034,7 +1143,8 @@ class DashboardWidget:
         def save() -> None:
             try:
                 refresh = max(5, min(3600, int(v_refresh.get())))
-                maxtodos = max(1, min(60, int(v_maxtodos.get())))
+                maxtodos = max(1, min(500, int(v_maxtodos.get())))
+                todos_h = max(80, min(1200, int(v_todos_h.get())))
             except (tk.TclError, ValueError):
                 return  # 숫자칸에 잘못된 값이 있으면 저장하지 않음
             disk = load_config()
@@ -1048,6 +1158,7 @@ class DashboardWidget:
             w["opacity"] = round(int(v_opacity.get()) / 100, 2)
             w["width"] = int(v_width.get())
             w["max_todos"] = maxtodos
+            w["todos_max_height"] = todos_h
             w["collapse_hotkey"] = v_hotkey.get().strip()
             w["hide_hotkey"] = v_hide_hotkey.get().strip()
             save_config(disk)

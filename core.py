@@ -114,10 +114,12 @@ DEFAULT_CONFIG = {
         "x": 60,              # 창 가로 위치(px)
         "y": 60,              # 창 세로 위치(px)
         "width": 340,         # 창 너비(px)
+        "height": 0,          # 창 높이(px). 0이면 내용에 맞춰 자동
         "opacity": 0.96,      # 투명도 (0.0~1.0)
         "theme": "dark",      # "dark" 또는 "light"
         "topmost": True,      # 항상 다른 창 위에 표시
         "max_todos": 12,      # 할 일 목록에 한 번에 보여줄 최대 개수
+        "todos_max_height": 240,   # 할 일 목록 영역 최대 높이(px) — 넘으면 스크롤
         "todos_collapsed": False,  # 할 일 목록을 접어 뒀는지
         "collapse_highlight": True,  # 접었을 때 제목 막대를 강조색으로
         "collapse_hotkey": "ctrl+alt+d",  # 접기/펴기 전역 단축키 (빈 값=끔)
