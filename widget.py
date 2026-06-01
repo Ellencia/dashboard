@@ -306,6 +306,9 @@ class DashboardWidget:
         self._settings_win: tk.Toplevel | None = None
         self._icon_buttons: list[tk.Label] = []
         self._todo_canvas: tk.Canvas | None = None   # 할 일 영역 내부 스크롤
+        # 깜빡임 방지: 마지막으로 그린 내용의 지문 — 같으면 redraw 건너뜀
+        self._last_draw_fp = None
+        self._footer_label: tk.Label | None = None
         # 설정 시 ✕가 종료 대신 이 콜백을 호출 (트레이 모드에서 '숨기기'로 씀)
         self.on_close_override = None
         # 닫기/열기 단축키의 동작 (None이면 위젯 창 자체를 숨김/표시)
@@ -477,7 +480,12 @@ class DashboardWidget:
     # 내용 그리기
     # ------------------------------------------------------------------
     def refresh(self) -> None:
-        """STATUS.md들을 다시 읽어 화면을 새로 그림."""
+        """STATUS.md들을 다시 읽어 화면을 새로 그림.
+
+        깜빡임을 줄이기 위해 '내용 지문'을 비교 — 마지막에 그린 것과
+        모든 면에서 같으면 redraw를 건너뛰고 푸터 시간만 갱신함.
+        대부분의 자동 새로고침은 변화가 없으므로 이 경로로 빠짐.
+        """
         # 다음 자동 새로고침 예약 (이전 예약은 취소)
         if self._after_id is not None:
             self.root.after_cancel(self._after_id)
@@ -487,15 +495,27 @@ class DashboardWidget:
         if self.collapsed:
             return  # 접혀 있으면 그리지 않음
 
-        # 기존 내용 제거
-        for child in self.body.winfo_children():
-            child.destroy()
-        # 드래그 관리자는 새로고침마다 새로 만듦 (옛 위젯 참조를 버림)
+        projects = scan_projects(self.cfg)
+
+        # 빠른 경로 — 마지막으로 그린 것과 같으면 redraw 안 함 (깜빡임 없음)
+        fp = self._draw_fingerprint(projects)
+        if fp == self._last_draw_fp:
+            self._update_footer_only()
+            return
+        self._last_draw_fp = fp
+
+        # 깜빡임 방지: 새 본문을 캔버스에 보이지 않은 채로 만들어 거기에 모두 그린 뒤,
+        # 캔버스의 embedded window를 한 번에 옛 본문 → 새 본문으로 교체. 옛 본문은
+        # 그 뒤에 파괴 → 사용자에겐 한 번의 매끈한 전환으로 보임 (개별 destroy 없음).
+        old_body = self.body
+        new_body = tk.Frame(self.canvas, bg=self.theme["bg"])
+        self.body = new_body
+        # _draw_* 가 참조하는 캐시들도 옛 위젯을 가리키지 않게 비움
         self._card_drag = None
         self._todo_drags = []
-        self._todo_canvas = None   # 할 일 스크롤 캔버스 (다시 그릴 때 새로 생김)
+        self._todo_canvas = None
+        self._footer_label = None
 
-        projects = scan_projects(self.cfg)
         visible = [p for p in projects if not p.hidden]
         hidden = [p for p in projects if p.hidden]
 
@@ -517,6 +537,17 @@ class DashboardWidget:
 
         self._draw_hidden_section(hidden)
         self._draw_footer()
+
+        # 스크롤 영역 갱신용 <Configure> 도 새 본문에 다시 연결
+        new_body.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")))
+
+        # 캔버스 안 embedded window를 옛 본문 → 새 본문으로 한 번에 교체
+        self.canvas.itemconfigure(self._body_id, window=new_body)
+        old_body.destroy()
+
         self._resize_to_content()
 
     def _draw_empty(self) -> None:
@@ -798,9 +829,42 @@ class DashboardWidget:
     def _draw_footer(self) -> None:
         t = self.theme
         now = datetime.now().strftime("%H:%M:%S")
-        tk.Label(self.body, text=f"업데이트 {now}", bg=t["bg"],
-                 fg=t["subtext"], font=(FONT, 7), anchor="e").pack(
-            fill="x", padx=12, pady=(8, 8))
+        self._footer_label = tk.Label(
+            self.body, text=f"업데이트 {now}", bg=t["bg"],
+            fg=t["subtext"], font=(FONT, 7), anchor="e")
+        self._footer_label.pack(fill="x", padx=12, pady=(8, 8))
+
+    def _update_footer_only(self) -> None:
+        """변화가 없을 때 — 푸터 시간만 in-place로 갱신 (위젯 새로 안 만듦)."""
+        if self._footer_label is None:
+            return
+        try:
+            now = datetime.now().strftime("%H:%M:%S")
+            self._footer_label.configure(text=f"업데이트 {now}")
+        except tk.TclError:
+            pass   # 라벨이 어떤 이유로 사라진 경우 조용히 무시
+
+    def _draw_fingerprint(self, projects: list) -> tuple:
+        """현재 그릴 내용의 지문 — 같으면 redraw가 필요 없음.
+
+        화면에 보이는 모든 정보(프로젝트 데이터·관련 설정·UI 토글 상태)를
+        포괄해야 함. 빠진 게 있으면 그 항목 변경 시 화면 갱신이 안 됨.
+        """
+        proj_part = tuple(
+            (p.folder.name, p.name, p.note, p.hidden, p.collapsed,
+             p.last_update, p.last_change,
+             tuple((it.text, it.done) for it in p.items))
+            for p in projects
+        )
+        cfg_part = (
+            tuple(self.cfg.get("project_order", [])),
+            bool(self.wcfg.get("todos_collapsed", False)),
+            int(self.wcfg.get("max_todos", 12)),
+            int(self.wcfg.get("todos_max_height", 240)),
+            bool(self.hidden_expanded),
+            int(self.width),
+        )
+        return (proj_part, cfg_part)
 
     # ------------------------------------------------------------------
     # 동작

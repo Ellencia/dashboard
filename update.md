@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 자동 새로고침 깜빡임 제거 — (1) 내용 지문 비교로 변화 없으면 redraw 자체를 건너뛰고 푸터 시간만 in-place 갱신, (2) redraw가 필요할 땐 새 본문 Frame을 보이지 않게 만들어 캔버스 embedded window를 한 번에 스왑(swap-buffer) — 카드를 하나씩 부수던 다중 paint를 단일 전환으로 대체
 - 위젯 창 크기 조절 — 오른쪽 아래 ◢ 그립을 끌어서 너비·높이 동시 조절. 새 크기는 config.json에 영구 저장(`width`·`height`). `height=0`이면 지금처럼 내용에 맞춘 자동 크기
 - 할 일 목록에 자체 스크롤 추가 — 일정 높이(설정창 todos_max_height, 기본 240px)를 넘으면 그 안에서만 스크롤됨. 마우스 휠은 커서 위치에 따라 본문/할 일 영역으로 분기됨
 - install_autostart 수정 — venv 자동 탐색(현재 실행 중인 pythonw → 주변 venv 재귀 탐색 → PATH) 및 동작 검증(pystray·pillow import) 추가. pythonw가 exit code를 셸에 안 돌려주는 문제를 같은 폴더 python.exe로 우회
