@@ -25,7 +25,9 @@ from pathlib import Path
 from core import (
     BASE_DIR,
     CONFIG_PATH,
+    add_quick_todo,
     load_config,
+    process_drop_folder,
     reorder_items,
     save_config,
     scan_projects,
@@ -381,11 +383,17 @@ class DashboardWidget:
 
         # 검색 StringVar — root가 생긴 뒤에야 만들 수 있음
         self._search_var = tk.StringVar()
+        # 빠른 입력 StringVar
+        self._quick_var = tk.StringVar()
+        # _drop/*.json 검사 타이머
+        self._drop_after_id: str | None = self.root.after(
+            3000, self._check_drop_folder)
 
         # 마우스 휠로 스크롤
         self.root.bind_all("<MouseWheel>", self._on_wheel)
-        # 키보드 단축키 — Ctrl+F=검색 토글, Esc=모든 필터 해제
+        # 키보드 단축키 — Ctrl+F=검색 토글, Ctrl+N=빠른입력 포커스, Esc=모든 필터 해제
         self.root.bind_all("<Control-f>", lambda e: self._toggle_search())
+        self.root.bind_all("<Control-n>", lambda e: self._focus_quick_input())
         self.root.bind_all("<Escape>", lambda e: self._clear_all_filters())
         # Alt+F4 등으로 닫혀도 창 위치를 저장하도록
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -569,16 +577,20 @@ class DashboardWidget:
         self._todo_drags = []
         self._todo_canvas = None
         self._footer_label = None
+        self._quick_entry = None
 
         visible = [p for p in projects if not p.hidden]
         hidden = [p for p in projects if p.hidden]
 
         if not projects:
             self._draw_empty()
+            self._draw_quick_input()   # 빈 상태에서도 빠른 입력으로 추가 가능
         elif not visible:
             # 프로젝트는 있지만 전부 숨겨진 경우
             self._draw_all_hidden()
+            self._draw_quick_input()
         else:
+            self._draw_quick_input()
             self._draw_summary(visible)
             # 카드들을 그리며 드래그 그룹에 등록 → 카드끼리 순서 변경 가능
             card_drag = _DragReorder(self.body, self.theme)
@@ -618,6 +630,39 @@ class DashboardWidget:
                        padx=10, pady=4)
         btn.pack(pady=(0, 16))
         btn.bind("<Button-1>", lambda e: self._new_project())
+
+    def _draw_quick_input(self) -> None:
+        """빠른 입력 한 줄. 형식: `[프로젝트] 텍스트 #태그 !날짜`.
+
+        프로젝트 안 적으면 Inbox(받은 편지함)로. 빈 줄은 무시.
+        Enter 또는 + 버튼 클릭으로 추가. Ctrl+N으로 포커스.
+        """
+        t = self.theme
+        row = tk.Frame(self.body, bg=t["bg"])
+        row.pack(fill="x", padx=12, pady=(6, 0))
+        plus = tk.Label(row, text="+", bg=t["bg"], fg=t["accent"],
+                        font=(FONT, 12, "bold"), cursor="hand2", padx=2)
+        plus.pack(side="left")
+        _Tooltip(plus, "할 일 추가 (Enter). 형식: [프로젝트] 내용 #태그 !날짜")
+        entry = tk.Entry(row, textvariable=self._quick_var, bg=t["card"],
+                         fg=t["text"], insertbackground=t["text"],
+                         relief="flat", font=(FONT, 9))
+        entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self._quick_entry = entry
+
+        def submit(_e=None) -> str | None:
+            line = self._quick_var.get().strip()
+            if not line:
+                return None
+            result = add_quick_todo(self.cfg, line)
+            if result is not None:
+                self._quick_var.set("")
+                self._last_draw_fp = None
+                self.refresh()
+            return "break"
+
+        entry.bind("<Return>", submit)
+        plus.bind("<Button-1>", submit)
 
     def _draw_summary(self, projects: list) -> None:
         t = self.theme
@@ -696,6 +741,26 @@ class DashboardWidget:
         self._search_after_id = None
         self._last_draw_fp = None
         self.refresh()
+
+    def _focus_quick_input(self) -> None:
+        """Ctrl+N — 빠른 입력 칸에 포커스."""
+        if getattr(self, "_quick_entry", None) is not None:
+            try:
+                self._quick_entry.focus_set()
+            except tk.TclError:
+                pass
+
+    def _check_drop_folder(self) -> None:
+        """주기적으로 root/_drop/*.json 검사 → 발견 시 처리·새로고침."""
+        try:
+            added = process_drop_folder(self.cfg)
+            if added:
+                self._last_draw_fp = None
+                self.refresh()
+        except Exception:
+            pass
+        # 다음 검사 예약 (5초 간격)
+        self._drop_after_id = self.root.after(5000, self._check_drop_folder)
 
     def _drag_handle(self, parent: tk.Widget, bg: str) -> tk.Label:
         """드래그용 손잡이 라벨(↕). 잡고 위아래로 끌면 순서가 바뀜."""

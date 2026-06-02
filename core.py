@@ -29,6 +29,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 STATUS_FILENAME = "STATUS.md"
 UPDATE_FILENAME = "update.md"
+INBOX_FOLDER_NAME = "_inbox"   # 프로젝트 미할당 todo가 들어가는 가상 프로젝트
+DROP_FOLDER_NAME = "_drop"     # 외부에서 JSON 드롭하면 자동 인식되는 폴더
 
 # 마크다운 체크박스 한 줄을 인식하는 정규식.
 #   "- [ ] 할 일"  /  "- [x] 끝난 일"  /  "* [X] ..." 모두 매칭
@@ -261,9 +263,9 @@ def _read_project(folder: Path) -> Project | None:
                    last_update=last_update, last_change=last_change)
 
 
-# 자동 탐색에서 건너뛸 폴더 이름 (코드/빌드 부산물 등)
+# 자동 탐색에서 건너뛸 폴더 이름 (코드/빌드 부산물 등). _drop은 JSON 드롭 폴더로 STATUS.md가 없음.
 _SKIP_DIR_NAMES = {"__pycache__", "node_modules", "site-packages",
-                   "dist", "build"}
+                   "dist", "build", DROP_FOLDER_NAME}
 
 
 def _should_skip_dir(name: str) -> bool:
@@ -573,6 +575,130 @@ def safe_folder_name(name: str) -> str:
     bad = set('\\/:*?"<>|')
     cleaned = "".join(c for c in name if c not in bad)
     return cleaned.strip().rstrip(". ")   # 끝의 마침표·공백은 윈도우에서 불가
+
+
+# ------------------------------------------------------------------
+# Inbox(가상 프로젝트) + 빠른 입력 + Watched 폴더(드롭 sync)
+# ------------------------------------------------------------------
+_QUICK_PROJECT_RE = re.compile(r"^\s*\[([^\]]+)\]\s*")
+
+
+def ensure_inbox(cfg: dict) -> Path:
+    """Inbox 프로젝트 폴더와 STATUS.md를 보장. 폴더 경로 반환.
+
+    한 번이라도 빠른 입력이나 드롭 파일을 쓰면 root/_inbox/ 가 만들어짐.
+    한 번도 안 쓰면 폴더 자체가 안 생김 — 위젯에도 안 나타남.
+    """
+    root = Path(cfg["root"]).resolve()
+    inbox = root / INBOX_FOLDER_NAME
+    inbox.mkdir(parents=True, exist_ok=True)
+    status = inbox / STATUS_FILENAME
+    if not status.exists():
+        status.write_text(
+            "# 📥 받은 편지함\n> 빠른 입력·자동 인식으로 들어온 할 일\n\n",
+            encoding="utf-8")
+    return inbox
+
+
+def find_project_folder(cfg: dict, name_or_id: str) -> Path | None:
+    """이름/폴더명으로 프로젝트 폴더 찾기 (정확 일치 → 부분 일치 순)."""
+    if not name_or_id:
+        return None
+    name_lo = name_or_id.lower()
+    projects = scan_projects(cfg)
+    # 정확 일치 (폴더명) → 정확 일치 (표시 이름) → 부분 일치
+    for p in projects:
+        if p.folder.name.lower() == name_lo:
+            return p.folder
+    for p in projects:
+        if p.name.lower() == name_lo:
+            return p.folder
+    for p in projects:
+        if name_lo in p.folder.name.lower():
+            return p.folder
+    for p in projects:
+        if name_lo in p.name.lower():
+            return p.folder
+    return None
+
+
+def parse_quick_input(line: str) -> tuple[str | None, str]:
+    """'[프로젝트] 텍스트 ...' → (프로젝트 id 또는 None, 나머지 텍스트).
+
+    텍스트엔 #태그·!날짜가 그대로 남음 (parse_status가 다시 추출).
+    """
+    m = _QUICK_PROJECT_RE.match(line)
+    if m:
+        return m.group(1).strip(), line[m.end():].strip()
+    return None, line.strip()
+
+
+def add_quick_todo(cfg: dict, line: str) -> tuple[Path, str] | None:
+    """빠른 입력 한 줄을 파싱해 적절한 프로젝트(또는 Inbox)에 추가.
+
+    [프로젝트] 가 명시됐는데 못 찾으면 Inbox에 넣고 텍스트 앞에 `[?원래id]`를
+    붙여 사용자가 나중에 옮길 수 있게 흔적을 남김.
+    반환: (저장된 폴더, 저장된 텍스트). 내용이 비면 None.
+    """
+    proj_id, content = parse_quick_input(line)
+    if not content:
+        return None
+    folder = None
+    if proj_id:
+        folder = find_project_folder(cfg, proj_id)
+        if folder is None:
+            folder = ensure_inbox(cfg)
+            content = f"[?{proj_id}] {content}"
+    else:
+        folder = ensure_inbox(cfg)
+    add_item(folder / STATUS_FILENAME, content)
+    return folder, content
+
+
+def process_drop_folder(cfg: dict) -> int:
+    """root/_drop/*.json 들을 처리. JSON 형식:
+        {"text": "...", "project": "buyflow", "tags": ["발주"], "due": "2026-06-15"}
+    project 없거나 못 찾으면 Inbox로. 처리한 파일은 삭제. 추가된 개수 반환.
+    """
+    root = Path(cfg["root"]).resolve()
+    drop = root / DROP_FOLDER_NAME
+    if not drop.exists():
+        return 0
+    added = 0
+    for f in sorted(drop.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        text = (data.get("text") or "").strip()
+        if not text:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+            continue
+        # 텍스트 + 태그 + 마감 결합 (parse_status가 #·! 를 다시 추출)
+        parts = [text]
+        for tag in data.get("tags") or []:
+            tag = str(tag).lstrip("#").strip()
+            if tag:
+                parts.append(f"#{tag}")
+        due = (data.get("due") or "").strip()
+        if due:
+            parts.append(f"!{due}")
+        body = " ".join(parts)
+        project = (data.get("project") or "").strip()
+        line = f"[{project}] {body}" if project else body
+        try:
+            if add_quick_todo(cfg, line) is not None:
+                added += 1
+        except OSError:
+            continue
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    return added
 
 
 def create_project(parent: Path, folder_name: str, display_name: str) -> Path:
