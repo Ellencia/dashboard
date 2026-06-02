@@ -32,4 +32,7 @@
 - [x] Inbox / 받은 편지함 (`_inbox/`, 자동 생성, 미할당 todo 풀)
 - [x] Watched 폴더 sync (`_drop/*.json` 5초마다 검사, 처리 후 삭제)
 - [x] Retained-mode 토글 — 체크박스 클릭 시 0 페인트 (그 외 동작은 swap-buffer)
+- [x] 프로젝트 템플릿 (templates/*.md, 새 프로젝트 드롭다운, {{name}} 치환)
+- [x] 주간 완료 통계 배지 (📈 이번주 N, _history.jsonl 기반)
+- [x] 트레이 마감 알림 (pystray.notify, 30분 주기, 자정 리셋)
 - [ ] 카톡 공유 → LLM 추출 → 컨펌 → STATUS.md 자동 추가 #다음단계

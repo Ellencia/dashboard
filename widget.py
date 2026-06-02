@@ -27,6 +27,7 @@ from core import (
     CONFIG_PATH,
     add_quick_todo,
     load_config,
+    log_completion,
     process_drop_folder,
     reorder_items,
     save_config,
@@ -35,6 +36,7 @@ from core import (
     toggle_collapsed,
     toggle_hidden,
     toggle_item,
+    weekly_completion_stats,
 )
 from hotkey import GlobalHotkey
 import editor
@@ -691,6 +693,22 @@ class DashboardWidget:
         add.pack(side="right")
         add.bind("<Button-1>", lambda e: self._new_project())
 
+        # 주간 완료 통계 배지 (이력이 있을 때만)
+        this_w, last_w = weekly_completion_stats(self.cfg)
+        if this_w or last_w:
+            diff = this_w - last_w
+            if diff > 0:
+                tail = f" (↑{diff})"
+            elif diff < 0:
+                tail = f" (↓{-diff})"
+            else:
+                tail = " (=)"
+            stats = tk.Label(row, text=f"📈 이번주 {this_w}{tail}",
+                             bg=t["bg"], fg=t["text"],
+                             font=(FONT, 8, "bold"))
+            stats.pack(side="right", padx=(0, 10))
+            _Tooltip(stats, f"이번 주 완료 {this_w}개 · 저번 주 {last_w}개")
+
     def _tag_color(self, tag: str) -> str:
         """태그 색 — 사용자 설정이 있으면 그걸, 없으면 해시 팔레트."""
         custom = self.wcfg.get("tag_colors") or {}
@@ -1221,8 +1239,10 @@ class DashboardWidget:
 
         Retained-mode: 가능하면 전체 redraw 없이 해당 줄·카드·합계만 in-place
         갱신해 사용자에게 0 페인트 경험을 줌. 실패하면 일반 refresh로 폴백.
+        위젯에서 보이는 줄은 항상 미완료라 클릭=완료로 전환 → 통계용 로그 남김.
         """
         toggle_item(item, proj.status_path)
+        log_completion(self.cfg, proj.folder.name, item.text)
         new_projects = scan_projects(self.cfg)
         new_proj = next((p for p in new_projects
                          if p.folder.name == proj.folder.name), None)

@@ -310,6 +310,24 @@ def open_new_project(parent_root, root_dir, theme, on_change) -> None:
              bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
              anchor="w").pack(fill="x")
 
+    # 템플릿 선택 (있을 때만 표시) — '(기본)'은 빈 STATUS.md
+    templates = core.list_templates()
+    v_template = tk.StringVar(value="(기본)")
+    if templates:
+        trow = tk.Frame(pad, bg=t["bg"])
+        trow.pack(fill="x", pady=(8, 0))
+        tk.Label(trow, text="템플릿", bg=t["bg"], fg=t["text"],
+                 font=(FONT, 9), width=5, anchor="w").pack(side="left")
+        options = ["(기본)"] + templates
+        om = tk.OptionMenu(trow, v_template, *options)
+        om.configure(bg=t["card"], fg=t["text"], activebackground=t["accent"],
+                     activeforeground="#ffffff", relief="flat",
+                     font=(FONT, 9), highlightthickness=0)
+        om["menu"].configure(bg=t["card"], fg=t["text"],
+                             activebackground=t["accent"],
+                             activeforeground="#ffffff")
+        om.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
     msg = tk.Label(pad, text="", bg=t["bg"], fg="#f7768e", font=(FONT, 8),
                    anchor="w")
     msg.pack(fill="x", pady=(4, 0))
@@ -326,8 +344,11 @@ def open_new_project(parent_root, root_dir, theme, on_change) -> None:
         if (root_dir / folder).exists():
             msg.configure(text="같은 이름의 프로젝트가 이미 있습니다")
             return
+        template = v_template.get()
+        if template == "(기본)":
+            template = None
         try:
-            core.create_project(root_dir, folder, name)
+            core.create_project(root_dir, folder, name, template=template)
         except OSError as e:
             msg.configure(text=f"생성 실패: {e}")
             return

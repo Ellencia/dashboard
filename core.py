@@ -27,10 +27,12 @@ from pathlib import Path
 # 이 파일(core.py)이 들어있는 폴더 = 대시보드 폴더
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
+TEMPLATES_DIR = BASE_DIR / "templates"   # 새 프로젝트용 STATUS.md 템플릿들
 STATUS_FILENAME = "STATUS.md"
 UPDATE_FILENAME = "update.md"
 INBOX_FOLDER_NAME = "_inbox"   # 프로젝트 미할당 todo가 들어가는 가상 프로젝트
 DROP_FOLDER_NAME = "_drop"     # 외부에서 JSON 드롭하면 자동 인식되는 폴더
+HISTORY_FILENAME = "_history.jsonl"   # 완료 이벤트 한 줄씩 (주간 통계용)
 
 # 마크다운 체크박스 한 줄을 인식하는 정규식.
 #   "- [ ] 할 일"  /  "- [x] 끝난 일"  /  "* [X] ..." 모두 매칭
@@ -509,6 +511,106 @@ def set_item_done(status_path: Path, text: str, done: bool) -> None:
     _write_lines(status_path, lines)
 
 
+# ------------------------------------------------------------------
+# 완료 이력 (주간 통계용)
+# ------------------------------------------------------------------
+def log_completion(cfg: dict, project_folder_name: str, item_text: str) -> None:
+    """완료 이벤트 한 줄을 root/_history.jsonl 에 append.
+
+    외부 편집으로 파일 끝이 \\n이 아닌 경우에도 줄이 섞이지 않게,
+    append 전에 마지막 바이트를 확인해 필요하면 줄바꿈을 먼저 씀.
+    """
+    root = Path(cfg["root"]).resolve()
+    history = root / HISTORY_FILENAME
+    entry = {
+        "date": date.today().isoformat(),
+        "project": project_folder_name,
+        "text": item_text,
+    }
+    try:
+        # 기존 파일이 \n으로 안 끝나면 줄바꿈 한 번 끼움
+        if history.exists() and history.stat().st_size > 0:
+            with open(history, "rb") as f:
+                f.seek(-1, 2)
+                needs_nl = f.read(1) != b"\n"
+            if needs_nl:
+                with open(history, "a", encoding="utf-8") as f:
+                    f.write("\n")
+        with open(history, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass   # 로깅 실패해도 토글 자체엔 영향 없게 조용히 넘김
+
+
+def read_history(cfg: dict) -> list[dict]:
+    """_history.jsonl의 모든 이벤트를 dict 리스트로."""
+    root = Path(cfg["root"]).resolve()
+    history = root / HISTORY_FILENAME
+    if not history.exists():
+        return []
+    out: list[dict] = []
+    try:
+        text = history.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def due_soon_todos(cfg: dict,
+                   threshold_days: int = 1) -> list[tuple]:
+    """오늘·내일 마감 또는 이미 지난 마감 todo 들을 (project, item, days) 리스트로.
+
+    days 가 음수면 지남, 0이면 오늘, 양수면 남은 일수. 숨김 프로젝트는 제외.
+    """
+    projects = scan_projects(cfg)
+    out: list[tuple] = []
+    today = date.today()
+    for p in projects:
+        if p.hidden:
+            continue
+        for it in p.todos:
+            if not it.due:
+                continue
+            try:
+                y, mo, d = (int(x) for x in it.due.split("-"))
+                target = date(y, mo, d)
+            except (ValueError, TypeError):
+                continue
+            days = (target - today).days
+            if days <= threshold_days:
+                out.append((p, it, days))
+    return out
+
+
+def weekly_completion_stats(cfg: dict) -> tuple[int, int]:
+    """이번 주(월~오늘)와 저번 주(월~일) 완료 개수 반환."""
+    from datetime import timedelta
+    entries = read_history(cfg)
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    last_monday = monday - timedelta(days=7)
+    last_sunday = monday - timedelta(days=1)
+    this_w, last_w = 0, 0
+    for e in entries:
+        try:
+            d = date.fromisoformat(e.get("date", ""))
+        except ValueError:
+            continue
+        if monday <= d <= today:
+            this_w += 1
+        elif last_monday <= d <= last_sunday:
+            last_w += 1
+    return this_w, last_w
+
+
 def reorder_items(status_path: Path, ordered_texts: list[str]) -> None:
     """STATUS.md의 체크박스 줄들을 ordered_texts 순서대로 재배치.
 
@@ -701,15 +803,43 @@ def process_drop_folder(cfg: dict) -> int:
     return added
 
 
-def create_project(parent: Path, folder_name: str, display_name: str) -> Path:
-    """새 프로젝트 폴더와 STATUS.md / update.md 를 만들고 폴더 경로를 반환."""
+def list_templates() -> list[str]:
+    """templates/ 안의 *.md 템플릿 이름 목록 (확장자 제외, 알파벳 순)."""
+    if not TEMPLATES_DIR.exists():
+        return []
+    return sorted(p.stem for p in TEMPLATES_DIR.glob("*.md"))
+
+
+def read_template(name: str, display_name: str) -> str | None:
+    """템플릿 파일 내용을 읽어 {{name}}을 프로젝트 표시 이름으로 치환.
+
+    템플릿을 못 찾으면 None.
+    """
+    if not name:
+        return None
+    path = TEMPLATES_DIR / f"{name}.md"
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8").replace("{{name}}", display_name)
+
+
+def create_project(parent: Path, folder_name: str, display_name: str,
+                   template: str | None = None) -> Path:
+    """새 프로젝트 폴더와 STATUS.md / update.md 를 만들고 폴더 경로를 반환.
+
+    template 이 주어지면 templates/<template>.md 내용을 STATUS.md 로 사용.
+    """
     folder = parent / folder_name
     folder.mkdir(parents=True, exist_ok=True)
 
     status_path = folder / STATUS_FILENAME
     if not status_path.exists():
-        status_path.write_text(
-            f"# {display_name}\n\n- [ ] 첫 할 일\n", encoding="utf-8")
+        content = None
+        if template:
+            content = read_template(template, display_name)
+        if content is None:
+            content = f"# {display_name}\n\n- [ ] 첫 할 일\n"
+        status_path.write_text(content, encoding="utf-8")
 
     update_path = folder / UPDATE_FILENAME
     if not update_path.exists():

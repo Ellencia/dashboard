@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import queue
 import threading
+from datetime import date
 
 import pystray
 from PIL import Image, ImageDraw
 
-from core import load_config, scan_projects
+from core import due_soon_todos, load_config, scan_projects
 from widget import DashboardWidget, bar_color
 
 
@@ -31,6 +32,49 @@ def _summary() -> tuple[int, str]:
     percent = round(done / total * 100) if total else 0
     title = f"프로젝트 보드 — {len(projects)}개 · 진행 {percent}% · 할 일 {todo}개"
     return percent, title
+
+
+def _due_notification_state() -> dict:
+    """마감 알림 상태(이미 알린 todo 키들·마지막 날짜) — 한 인스턴스에서 공유."""
+    return {"last_date": "", "notified": set()}
+
+
+def _check_due_and_notify(icon, state: dict) -> None:
+    """마감 임박 todo 검사 후 새 항목이면 트레이 토스트."""
+    try:
+        cfg = load_config()
+        today_iso = date.today().isoformat()
+        if state.get("last_date") != today_iso:
+            state["last_date"] = today_iso
+            state["notified"] = set()
+        notified: set = state["notified"]
+        for proj, item, days in due_soon_todos(cfg, threshold_days=1):
+            key = (proj.folder.name, item.text)
+            if key in notified:
+                continue
+            notified.add(key)
+            if days < 0:
+                title = f"⚠ 지난 마감 (D+{-days})"
+            elif days == 0:
+                title = "📍 오늘 마감"
+            else:
+                title = "🔔 내일 마감"
+            try:
+                icon.notify(f"[{proj.name}] {item.text}", title)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _schedule_due_check(icon, state: dict, first: bool = False) -> None:
+    """주기적으로 _check_due_and_notify 실행 (첫 호출은 짧게, 이후 30분)."""
+    delay = 10 if first else 1800
+    timer = threading.Timer(
+        delay, lambda: (_check_due_and_notify(icon, state),
+                        _schedule_due_check(icon, state)))
+    timer.daemon = True
+    timer.start()
 
 
 def _make_icon_image(percent: int) -> Image.Image:
@@ -77,6 +121,10 @@ def run_tray(ipc_server=None) -> None:
     # 트레이 아이콘은 별도 스레드 (메인 스레드는 tkinter mainloop가 차지)
     threading.Thread(target=lambda: icon.run(setup=_on_ready),
                      daemon=True).start()
+
+    # 마감 임박 todo 알림 — 시작 10초 후 첫 검사, 이후 30분마다
+    due_state = _due_notification_state()
+    _schedule_due_check(icon, due_state, first=True)
 
     # 설정 저장 시 위젯이 다시 만들어질 수 있으므로 루프로 감쌈
     while True:
