@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- Retained-mode 토글 — 체크박스 클릭 시 전체 재구성 없이 해당 줄 pack_forget + 카드 %·진행바·메타·합계만 in-place 갱신. 0개 위젯 destroy로 진짜 0 페인트. 실패하면 일반 refresh로 폴백
 - 빠른 입력 한 줄 추가 — 위젯 상단의 `+` 입력칸에 `[프로젝트] 텍스트 #태그 !날짜` 형식으로 한 줄 입력하면 그 프로젝트의 STATUS.md에 즉시 추가됨. Ctrl+N으로 포커스
 - 받은 편지함 (Inbox) 가상 프로젝트 — 프로젝트 미할당 todo는 `root/_inbox/` 에 모임. 빠른 입력에서 프로젝트 안 적었거나 못 찾았을 때 자동 생성
 - Watched 폴더 sync — `root/_drop/*.json` 5초마다 자동 검사. JSON 형식 `{text, project, tags, due}` 받아 해당 프로젝트(또는 Inbox)에 추가, 파일은 처리 후 삭제. 외부(카톡 공유, 백엔드 등) 통합의 표준 진입점

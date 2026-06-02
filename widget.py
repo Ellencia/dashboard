@@ -351,6 +351,12 @@ class DashboardWidget:
         # 깜빡임 방지: 마지막으로 그린 내용의 지문 — 같으면 redraw 건너뜀
         self._last_draw_fp = None
         self._footer_label: tk.Label | None = None
+        # Retained-mode: 토글 같은 빈번한 동작을 in-place로 처리하기 위한 ref 캐시
+        self._card_refs: dict = {}        # folder.name → {percent, bar, meta}
+        self._todo_row_refs: dict = {}    # (folder.name, item.text) → row Frame
+        self._todo_group_refs: dict = {}  # folder.name → {header, drag}
+        self._summary_count: tk.Label | None = None
+        self._todo_header_label: tk.Label | None = None
         # 활성 태그 필터 — 칩 클릭 시 그 태그의 할 일만 표시
         self._tag_filter: str | None = None
         # 검색 상태 — 🔍 토글로 검색 바 표시, 비어 있으면 필터링 X
@@ -578,6 +584,11 @@ class DashboardWidget:
         self._todo_canvas = None
         self._footer_label = None
         self._quick_entry = None
+        self._card_refs = {}
+        self._todo_row_refs = {}
+        self._todo_group_refs = {}
+        self._summary_count = None
+        self._todo_header_label = None
 
         visible = [p for p in projects if not p.hidden]
         hidden = [p for p in projects if p.hidden]
@@ -670,8 +681,11 @@ class DashboardWidget:
         row = tk.Frame(self.body, bg=t["bg"])
         row.pack(fill="x", padx=12, pady=(8, 2))
         text = f"프로젝트 {len(projects)}개 · 남은 할 일 {todo_count}개"
-        tk.Label(row, text=text, bg=t["bg"], fg=t["subtext"],
-                 font=(FONT, 8), anchor="w").pack(side="left")
+        # in-place 업데이트용 ref 저장
+        self._summary_count = tk.Label(row, text=text, bg=t["bg"],
+                                       fg=t["subtext"], font=(FONT, 8),
+                                       anchor="w")
+        self._summary_count.pack(side="left")
         add = tk.Label(row, text="+ 새 프로젝트", bg=t["bg"], fg=t["accent"],
                        font=(FONT, 8, "bold"), cursor="hand2")
         add.pack(side="right")
@@ -796,19 +810,22 @@ class DashboardWidget:
                         font=(FONT, 10, "bold"), cursor="hand2")
         name.pack(side="left")
         name.bind("<Button-1>", lambda e, p=proj: self._open_path(p.status_path))
-        tk.Label(top, text=f"{proj.percent}%", bg=t["card"], fg=t["text"],
-                 font=(FONT, 10, "bold")).pack(side="right")
+        percent_lbl = tk.Label(top, text=f"{proj.percent}%", bg=t["card"],
+                               fg=t["text"], font=(FONT, 10, "bold"))
+        percent_lbl.pack(side="right")
 
         # 진행바 (접혀 있어도 표시 — 진행률은 한눈에 보이게)
-        self._draw_progress_bar(inner, proj.percent)
+        bar_canvas = self._draw_progress_bar(inner, proj.percent)
 
         # 접혀 있으면 세부 정보(완료 개수·메모·최근 변경)는 생략
+        meta_lbl: tk.Label | None = None
         if not proj.collapsed:
             meta = f"완료 {proj.done} / {proj.total}"
             if proj.percent >= 100 and proj.total > 0:
                 meta += "   🎉"
-            tk.Label(inner, text=meta, bg=t["card"], fg=t["subtext"],
-                     font=(FONT, 8), anchor="w").pack(fill="x", pady=(3, 0))
+            meta_lbl = tk.Label(inner, text=meta, bg=t["card"],
+                                fg=t["subtext"], font=(FONT, 8), anchor="w")
+            meta_lbl.pack(fill="x", pady=(3, 0))
             if proj.note:
                 tk.Label(inner, text=proj.note, bg=t["card"], fg=t["subtext"],
                          font=(FONT, 8), anchor="w", justify="left",
@@ -830,15 +847,30 @@ class DashboardWidget:
         # 카드 어디서든 우클릭 → 프로젝트 메뉴 (숨기기 / 파일 열기)
         self._bind_tree(card, "<Button-3>",
                         lambda e, p=proj: self._show_project_menu(e, p))
+        # in-place 갱신용 ref 저장 (% / 진행바 / 메타)
+        self._card_refs[proj.folder.name] = {
+            "percent": percent_lbl,
+            "bar": bar_canvas,
+            "meta": meta_lbl,
+        }
         return card, handle
 
-    def _draw_progress_bar(self, parent: tk.Frame, percent: int) -> None:
+    def _draw_progress_bar(self, parent: tk.Frame, percent: int) -> tk.Canvas:
         t = self.theme
         bar_w = self.width - 40
         height = 8
         cv = tk.Canvas(parent, width=bar_w, height=height, bg=t["card"],
                        highlightthickness=0, bd=0)
         cv.pack(anchor="w", pady=(6, 0))
+        self._fill_progress_bar(cv, percent)
+        return cv
+
+    def _fill_progress_bar(self, cv: tk.Canvas, percent: int) -> None:
+        """진행바 캔버스의 내용물만 다시 그림 (in-place 갱신용)."""
+        t = self.theme
+        cv.delete("all")
+        bar_w = int(cv["width"])
+        height = int(cv["height"])
         cv.create_rectangle(0, 0, bar_w, height, fill=t["bar_bg"], outline="")
         fill_w = max(0, min(bar_w, bar_w * percent / 100))
         if fill_w > 0:
@@ -888,6 +920,7 @@ class DashboardWidget:
                           anchor="w", cursor="hand2")
         header.pack(side="left", fill="x", expand=True)
         header.bind("<Button-1>", lambda e: self._toggle_todos_collapsed())
+        self._todo_header_label = header   # in-place 갱신용
         # 🔍 검색 토글 (Ctrl+F 도 같은 동작)
         search_btn = tk.Label(
             header_row, text="🔍",
@@ -974,17 +1007,22 @@ class DashboardWidget:
         for proj, todos_in_proj in active_filtered:
             if not unlimited and shown >= max_todos:
                 break
-            self._draw_todo_group_header(inner_frame, proj)
+            group_header = self._draw_todo_group_header(inner_frame, proj)
             drag = _DragReorder(inner_frame, t)
             for item in todos_in_proj:
                 if not unlimited and shown >= max_todos:
                     break
                 handle, row = self._draw_todo_row(inner_frame, proj, item)
                 drag.add_row(handle, row, item)
+                # in-place 갱신용 — (folder, text)로 행 위젯 캐시
+                self._todo_row_refs[(proj.folder.name, item.text)] = row
                 shown += 1
             drag.on_reorder = (
                 lambda new_items, p=proj: self._reorder_todos(p, new_items))
             self._todo_drags.append(drag)
+            self._todo_group_refs[proj.folder.name] = {
+                "header": group_header, "drag": drag,
+            }
 
         # 내용 높이에 맞춰 캔버스 높이 결정 (최대 todos_max_height 까지)
         inner_frame.update_idletasks()
@@ -999,12 +1037,12 @@ class DashboardWidget:
                      bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
 
-    def _draw_todo_group_header(self, parent: tk.Widget, proj) -> None:
+    def _draw_todo_group_header(self, parent: tk.Widget, proj) -> tk.Frame:
         """할 일 목록 안에서 한 프로젝트 묶음의 소제목 + 태그별 개수 칩.
 
         칩 클릭 시 그 태그로 필터됨 → 묶음 간 빠른 카테고리 전환.
         카운트는 필터와 무관하게 그 프로젝트 전체 미완료 기준 (다른 태그가
-        어떤 게 있는지도 보여 줌).
+        어떤 게 있는지도 보여 줌). 헤더 Frame을 반환 (in-place에서 숨김 처리용).
         """
         t = self.theme
         row = tk.Frame(parent, bg=t["bg"])
@@ -1025,6 +1063,7 @@ class DashboardWidget:
             chip.pack(side="left", padx=(3, 0))
             chip.bind("<Button-1>",
                       lambda e, tg=tag: self._toggle_tag_filter(tg))
+        return row
 
     def _draw_todo_row(self, parent: tk.Widget, proj,
                        item) -> tuple[tk.Label, tk.Frame]:
@@ -1178,9 +1217,102 @@ class DashboardWidget:
     # 동작
     # ------------------------------------------------------------------
     def _on_todo_click(self, proj, item) -> None:
-        """할 일 줄 클릭 → STATUS.md의 체크 상태를 토글하고 새로고침."""
+        """할 일 줄 클릭 → STATUS.md의 체크 상태를 토글.
+
+        Retained-mode: 가능하면 전체 redraw 없이 해당 줄·카드·합계만 in-place
+        갱신해 사용자에게 0 페인트 경험을 줌. 실패하면 일반 refresh로 폴백.
+        """
         toggle_item(item, proj.status_path)
-        self.refresh()
+        new_projects = scan_projects(self.cfg)
+        new_proj = next((p for p in new_projects
+                         if p.folder.name == proj.folder.name), None)
+        if new_proj is None:
+            self.refresh()
+            return
+        if not self._inplace_toggle_todo(proj, item, new_proj, new_projects):
+            self.refresh()
+
+    def _inplace_toggle_todo(self, proj, item, new_proj, new_projects) -> bool:
+        """토글 후 줄·카드·합계 in-place 갱신. 실패면 False (호출자가 refresh)."""
+        try:
+            # 1. 토글된 줄을 pack_forget (위젯은 살려둠 — 다음 refresh에서 정리)
+            row_key = (proj.folder.name, item.text)
+            row = self._todo_row_refs.pop(row_key, None)
+            if row is not None and row.winfo_exists():
+                row.pack_forget()
+                # DragReorder의 rows에서도 제거 → 드래그 좌표 계산 안 깨짐
+                group = self._todo_group_refs.get(proj.folder.name)
+                if group is not None:
+                    drag = group.get("drag")
+                    if drag is not None:
+                        drag.rows = [(r, p) for r, p in drag.rows if r is not row]
+
+            # 2. 카드의 % / 진행바 / 메타 갱신
+            card_ref = self._card_refs.get(proj.folder.name)
+            if card_ref is not None:
+                pct = card_ref.get("percent")
+                if pct is not None and pct.winfo_exists():
+                    pct.configure(text=f"{new_proj.percent}%")
+                bar = card_ref.get("bar")
+                if bar is not None and bar.winfo_exists():
+                    self._fill_progress_bar(bar, new_proj.percent)
+                meta = card_ref.get("meta")
+                if meta is not None and meta.winfo_exists():
+                    meta_text = f"완료 {new_proj.done} / {new_proj.total}"
+                    if new_proj.percent >= 100 and new_proj.total > 0:
+                        meta_text += "   🎉"
+                    meta.configure(text=meta_text)
+
+            # 3. 미완료가 0이 된 프로젝트는 묶음 헤더도 숨김
+            if not new_proj.todos:
+                group = self._todo_group_refs.get(proj.folder.name)
+                if group is not None:
+                    h = group.get("header")
+                    if h is not None and h.winfo_exists():
+                        h.pack_forget()
+
+            # 4. 상단 요약 count
+            visible = [p for p in new_projects if not p.hidden]
+            if (self._summary_count is not None
+                    and self._summary_count.winfo_exists()):
+                total_todo = sum(len(p.todos) for p in visible)
+                self._summary_count.configure(
+                    text=f"프로젝트 {len(visible)}개 · 남은 할 일 {total_todo}개")
+
+            # 5. 할 일 헤더 카운트 (필터·검색 상태 반영해 _draw_todos와 동일하게)
+            if (self._todo_header_label is not None
+                    and self._todo_header_label.winfo_exists()):
+                flt = self._tag_filter
+                query = self._search_query().lower()
+                active = [p for p in visible if not p.collapsed and p.todos]
+                collapsed_todos = sum(len(p.todos) for p in visible if p.collapsed)
+                def passes_count(p_):
+                    n = 0
+                    for it in p_.todos:
+                        if flt is not None and flt not in it.tags:
+                            continue
+                        if query and query not in it.text.lower():
+                            continue
+                        n += 1
+                    return n
+                total = sum(passes_count(p) for p in active)
+                collapsed_ui = bool(self.wcfg.get("todos_collapsed", False))
+                arrow = "▸" if collapsed_ui else "▾"
+                count = str(total)
+                if flt:
+                    count += f"  (#{flt} 필터)"
+                if query:
+                    count += f"  (\"{query}\" 검색)"
+                if collapsed_todos:
+                    count += f"  (접힌 카드 {collapsed_todos}개)"
+                self._todo_header_label.configure(
+                    text=f"{arrow} 📋 할 일   {count}")
+
+            # 6. 다음 auto-tick에서 skip되도록 지문 캐시 갱신
+            self._last_draw_fp = self._draw_fingerprint(new_projects)
+            return True
+        except (tk.TclError, AttributeError, KeyError):
+            return False
 
     def _show_project_menu(self, event, proj) -> None:
         """프로젝트 카드 우클릭 메뉴 — 접기 / 숨기기 / 파일 열기."""

@@ -31,5 +31,5 @@
 - [x] 빠른 입력 바 (`+` 입력칸, Ctrl+N, `[프로젝트] 텍스트 #태그 !날짜`)
 - [x] Inbox / 받은 편지함 (`_inbox/`, 자동 생성, 미할당 todo 풀)
 - [x] Watched 폴더 sync (`_drop/*.json` 5초마다 검사, 처리 후 삭제)
-- [ ] Retained-mode refresh (사용자 동작 시 0 페인트) #다음
+- [x] Retained-mode 토글 — 체크박스 클릭 시 0 페인트 (그 외 동작은 swap-buffer)
 - [ ] 카톡 공유 → LLM 추출 → 컨펌 → STATUS.md 자동 추가 #다음단계
