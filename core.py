@@ -38,6 +38,9 @@ _CHECK_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*(.+?)\s*$")
 # 할 일 안의 #태그 — "#발주", "#자재", "#abc" 등. \w는 유니코드라 한글도 OK.
 _TAG_RE = re.compile(r"#(\w+)")
 
+# 할 일 안의 !마감일 — "!2026-06-15" 형식. 한 자리 월·일도 허용 ("!2026-6-5").
+_DUE_RE = re.compile(r"!(\d{4}-\d{1,2}-\d{1,2})")
+
 # update.md 파싱용 정규식
 _HEADING2_RE = re.compile(r"^##\s+(.+?)\s*$")            # "## 제목"
 _DATE_RE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}")  # 2026-05-20 등
@@ -48,11 +51,12 @@ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")          # "- 내용"
 class TodoItem:
     """STATUS.md의 체크박스 한 줄."""
 
-    text: str             # 태그 포함 원본 텍스트 (파일 매칭용)
+    text: str             # 태그·마감일 포함 원본 텍스트 (파일 매칭용)
     done: bool
     line_no: int          # STATUS.md 안에서 몇 번째 줄인지 (0부터 시작)
     project_name: str     # 어느 프로젝트에 속한 항목인지
     tags: list[str] = field(default_factory=list)   # text 안 #태그 들 (순서대로)
+    due: str = ""         # 마감일 (ISO "YYYY-MM-DD"), 없으면 빈 문자열
 
 
 @dataclass
@@ -163,6 +167,12 @@ def _parse_status(path: Path, project_name: str) -> tuple[str, list[TodoItem]]:
         m = _CHECK_RE.match(line)
         if m:
             text = m.group(2)
+            due_match = _DUE_RE.search(text)
+            due = ""
+            if due_match:
+                # 한 자리 월/일은 두 자리로 정규화 ("2026-6-5" → "2026-06-05")
+                y, mo, d = due_match.group(1).split("-")
+                due = f"{y}-{int(mo):02d}-{int(d):02d}"
             items.append(
                 TodoItem(
                     text=text,
@@ -170,6 +180,7 @@ def _parse_status(path: Path, project_name: str) -> tuple[str, list[TodoItem]]:
                     line_no=line_no,
                     project_name=project_name,
                     tags=_TAG_RE.findall(text),
+                    due=due,
                 )
             )
         elif not note and line.startswith(">"):

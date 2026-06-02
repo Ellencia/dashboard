@@ -43,6 +43,8 @@ TITLEBAR_H = 34          # 제목 표시줄 높이(px)
 
 # 할 일 텍스트에서 #태그 부분(앞 공백 포함)을 떼어 표시용 글자만 남기는 정규식
 _TAG_STRIP_RE = re.compile(r"\s*#\w+")
+# 마감일 (!YYYY-MM-DD)도 표시용 글자에서 제거
+_DUE_STRIP_RE = re.compile(r"\s*!\d{4}-\d{1,2}-\d{1,2}")
 
 # 같은 태그는 항상 같은 색이 되도록 결정적으로 매핑하는 작은 팔레트
 _TAG_PALETTE = ["#7aa2f7", "#9ece6a", "#e0af68", "#f7768e",
@@ -52,6 +54,31 @@ _TAG_PALETTE = ["#7aa2f7", "#9ece6a", "#e0af68", "#f7768e",
 def _tag_color_default(tag: str) -> str:
     """태그 문자열의 해시값으로 팔레트의 한 색을 골라줌 (같은 태그=같은 색)."""
     return _TAG_PALETTE[hash(tag) % len(_TAG_PALETTE)]
+
+
+def _due_badge(due: str) -> tuple[str, str] | None:
+    """마감일 문자열 → (배지 라벨, 배경색). 잘못된 형식이면 None.
+
+    당일/지남 = 빨강, D-3 이내 = 주황, D-7 이내 = 노랑, 그 외 = 회청색.
+    """
+    if not due:
+        return None
+    try:
+        from datetime import date
+        y, m, d = (int(x) for x in due.split("-"))
+        target = date(y, m, d)
+    except (ValueError, TypeError):
+        return None
+    days = (target - date.today()).days
+    if days < 0:
+        return (f"D+{-days}", "#f7768e")   # 지난 마감 — 빨강
+    if days == 0:
+        return ("오늘", "#ff9e64")          # 당일 — 주황
+    if days <= 3:
+        return (f"D-{days}", "#e0af68")    # 임박 — 노랑
+    if days <= 7:
+        return (f"D-{days}", "#9ece6a")    # 일주일 이내 — 초록
+    return (f"D-{days}", "#7aa2f7")        # 여유 있음 — 파랑
 
 # 색상 테마 (다크 / 라이트)
 THEMES = {
@@ -324,6 +351,10 @@ class DashboardWidget:
         self._footer_label: tk.Label | None = None
         # 활성 태그 필터 — 칩 클릭 시 그 태그의 할 일만 표시
         self._tag_filter: str | None = None
+        # 검색 상태 — 🔍 토글로 검색 바 표시, 비어 있으면 필터링 X
+        self._search_active = False
+        self._search_var: tk.StringVar | None = None    # __init__ root 만든 뒤 초기화
+        self._search_after_id: str | None = None        # 디바운스 타이머
         # 설정 시 ✕가 종료 대신 이 콜백을 호출 (트레이 모드에서 '숨기기'로 씀)
         self.on_close_override = None
         # 닫기/열기 단축키의 동작 (None이면 위젯 창 자체를 숨김/표시)
@@ -348,8 +379,14 @@ class DashboardWidget:
         self._build_scroll_area()
         self._build_resize_grip()
 
+        # 검색 StringVar — root가 생긴 뒤에야 만들 수 있음
+        self._search_var = tk.StringVar()
+
         # 마우스 휠로 스크롤
         self.root.bind_all("<MouseWheel>", self._on_wheel)
+        # 키보드 단축키 — Ctrl+F=검색 토글, Esc=모든 필터 해제
+        self.root.bind_all("<Control-f>", lambda e: self._toggle_search())
+        self.root.bind_all("<Escape>", lambda e: self._clear_all_filters())
         # Alt+F4 등으로 닫혀도 창 위치를 저장하도록
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -612,6 +649,54 @@ class DashboardWidget:
         self._last_draw_fp = None
         self.refresh()
 
+    def _toggle_search(self) -> None:
+        """🔍 클릭 또는 Ctrl+F — 검색 바 표시 토글. 닫을 땐 쿼리도 비움."""
+        self._search_active = not self._search_active
+        if not self._search_active and self._search_var is not None:
+            self._search_var.set("")
+        self._last_draw_fp = None
+        self.refresh()
+
+    def _clear_all_filters(self) -> None:
+        """Esc — 태그 필터·검색을 한 번에 해제."""
+        changed = False
+        if self._tag_filter is not None:
+            self._tag_filter = None
+            changed = True
+        if self._search_var is not None and self._search_var.get():
+            self._search_var.set("")
+            changed = True
+        if self._search_active:
+            self._search_active = False
+            changed = True
+        if changed:
+            self._last_draw_fp = None
+            self.refresh()
+
+    def _search_query(self) -> str:
+        """현재 검색 쿼리 (없으면 빈 문자열)."""
+        if self._search_var is None:
+            return ""
+        return self._search_var.get().strip()
+
+    def _on_search_key(self, event) -> None:
+        """검색 입력칸 KeyRelease — 200ms 디바운스 후 refresh."""
+        if event.keysym == "Escape":
+            self._clear_all_filters()
+            return
+        if self._search_after_id is not None:
+            try:
+                self.root.after_cancel(self._search_after_id)
+            except Exception:
+                pass
+        self._search_after_id = self.root.after(
+            200, self._do_search_refresh)
+
+    def _do_search_refresh(self) -> None:
+        self._search_after_id = None
+        self._last_draw_fp = None
+        self.refresh()
+
     def _drag_handle(self, parent: tk.Widget, bg: str) -> tk.Label:
         """드래그용 손잡이 라벨(↕). 잡고 위아래로 끌면 순서가 바뀜."""
         t = self.theme
@@ -702,9 +787,17 @@ class DashboardWidget:
         active = [p for p in projects if not p.collapsed and p.todos]
         collapsed_todos = sum(len(p.todos) for p in projects if p.collapsed)
         flt = self._tag_filter
-        # 필터 활성 시 각 프로젝트 todos를 그 태그만 남기고 추림
+        query = self._search_query().lower()
+        # 필터·검색 활성 시 각 프로젝트 todos를 추림
         def todos_for(p):
-            return [it for it in p.todos if flt is None or flt in it.tags]
+            out = []
+            for it in p.todos:
+                if flt is not None and flt not in it.tags:
+                    continue
+                if query and query not in it.text.lower():
+                    continue
+                out.append(it)
+            return out
         active_filtered = [(p, todos_for(p)) for p in active]
         active_filtered = [(p, ts) for p, ts in active_filtered if ts]
         total = sum(len(ts) for _, ts in active_filtered)
@@ -713,19 +806,48 @@ class DashboardWidget:
         tk.Frame(self.body, bg=t["bar_bg"], height=1).pack(
             fill="x", padx=12, pady=(10, 0))
 
-        # 헤더 (클릭하면 할 일 목록 전체 접기/펴기)
+        # 헤더 (클릭하면 할 일 목록 전체 접기/펴기) + 🔍 검색 토글
         collapsed = bool(self.wcfg.get("todos_collapsed", False))
         arrow = "▸" if collapsed else "▾"
         count = str(total)
         if flt:
             count += f"  (#{flt} 필터)"
+        if query:
+            count += f"  (\"{query}\" 검색)"
         if collapsed_todos:
             count += f"  (접힌 카드 {collapsed_todos}개)"
-        header = tk.Label(self.body, text=f"{arrow} 📋 할 일   {count}",
+        header_row = tk.Frame(self.body, bg=t["bg"])
+        header_row.pack(fill="x", padx=12, pady=(8, 4))
+        header = tk.Label(header_row, text=f"{arrow} 📋 할 일   {count}",
                           bg=t["bg"], fg=t["text"], font=(FONT, 9, "bold"),
                           anchor="w", cursor="hand2")
-        header.pack(fill="x", padx=12, pady=(8, 4))
+        header.pack(side="left", fill="x", expand=True)
         header.bind("<Button-1>", lambda e: self._toggle_todos_collapsed())
+        # 🔍 검색 토글 (Ctrl+F 도 같은 동작)
+        search_btn = tk.Label(
+            header_row, text="🔍",
+            bg=t["accent"] if self._search_active else t["bg"],
+            fg="#1e1e2e" if self._search_active else t["subtext"],
+            font=(FONT, 9), cursor="hand2", padx=3)
+        search_btn.pack(side="right")
+        search_btn.bind("<Button-1>", lambda e: self._toggle_search())
+        _Tooltip(search_btn, "검색 (Ctrl+F · Esc로 해제)")
+
+        # 검색 바 (활성 시) — 필터 배너보다 위에 둠
+        if self._search_active and not collapsed:
+            sbar = tk.Frame(self.body, bg=t["bg"])
+            sbar.pack(fill="x", padx=14, pady=(0, 4))
+            tk.Label(sbar, text="검색:", bg=t["bg"], fg=t["subtext"],
+                     font=(FONT, 8)).pack(side="left")
+            entry = tk.Entry(sbar, textvariable=self._search_var,
+                             bg=t["card"], fg=t["text"],
+                             insertbackground=t["text"], relief="flat",
+                             font=(FONT, 9))
+            entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+            entry.bind("<KeyRelease>", self._on_search_key)
+            # 새로 그려질 때마다 포커스 복원 (입력 끊김 방지)
+            entry.focus_set()
+            entry.icursor(tk.END)
 
         # 필터 배너 — 활성 시 헤더 아래에 표시 (✕로 해제)
         if flt:
@@ -866,11 +988,22 @@ class DashboardWidget:
             chip.pack(side="right", padx=(3, 0))
             chips.append(chip)
 
-        # 표시용 텍스트 — #태그 부분 제거, 공백 정리. 빈 문자열이 되면 원본 사용
+        # 마감일 배지 (있을 때만, 태그 칩보다 왼쪽 = 안쪽)
+        due_extra = 0
+        badge_info = _due_badge(item.due)
+        if badge_info:
+            label, color = badge_info
+            tk.Label(row, text=label, bg=color, fg="#1e1e2e",
+                     font=(FONT, 7, "bold"), padx=4).pack(
+                side="right", padx=(3, 0))
+            due_extra = 40
+
+        # 표시용 텍스트 — #태그/마감일 부분 제거, 공백 정리. 빈 문자열이면 원본
         display = _TAG_STRIP_RE.sub("", item.text)
+        display = _DUE_STRIP_RE.sub("", display)
         display = re.sub(r"\s+", " ", display).strip() or item.text
-        # 칩이 차지할 가로폭을 대략 빼 wraplength 잡기 (태그 1개당 ~35px 추정)
-        chip_room = 35 * len(item.tags)
+        # 칩·배지가 차지할 가로폭 (태그 1개당 ~35px, 마감 배지 ~40px)
+        chip_room = 35 * len(item.tags) + due_extra
         txt = tk.Label(row, text=display, bg=t["bg"], fg=t["text"],
                        font=(FONT, 9), anchor="w", justify="left",
                        cursor="hand2",
@@ -959,7 +1092,7 @@ class DashboardWidget:
         proj_part = tuple(
             (p.folder.name, p.name, p.note, p.hidden, p.collapsed,
              p.last_update, p.last_change,
-             tuple((it.text, it.done) for it in p.items))
+             tuple((it.text, it.done, it.due) for it in p.items))
             for p in projects
         )
         cfg_part = (
@@ -971,6 +1104,8 @@ class DashboardWidget:
             int(self.width),
             self._tag_filter or "",
             tuple(sorted((self.wcfg.get("tag_colors") or {}).items())),
+            self._search_active,
+            self._search_query(),
         )
         return (proj_part, cfg_part)
 
