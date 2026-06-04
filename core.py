@@ -44,6 +44,9 @@ _TAG_RE = re.compile(r"#(\w+)")
 
 # 할 일 안의 !마감일 — "!2026-06-15" 형식. 한 자리 월·일도 허용 ("!2026-6-5").
 _DUE_RE = re.compile(r"!(\d{4}-\d{1,2}-\d{1,2})")
+# 자연어 마감 토큰 — !뒤에 공백/#/! 직전까지 (예: !오늘, !금, !+3, !+1w)
+_DUE_TOKEN_RE = re.compile(r"!([^\s#!]+)")
+_KOREAN_WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 
 # update.md 파싱용 정규식
 _HEADING2_RE = re.compile(r"^##\s+(.+?)\s*$")            # "## 제목"
@@ -461,8 +464,62 @@ def set_project_note(status_path: Path, note: str) -> None:
     _write_lines(status_path, lines)
 
 
+def parse_natural_due(token: str) -> str | None:
+    """자연어 마감 토큰을 ISO YYYY-MM-DD로 변환.
+
+    인식하는 형식:
+      - "오늘"/"내일"/"모레"/"글피"/"어제"
+      - "+N" / "-N" (N일 후/전) / "+Nw" (N주) / "+Nm" (N달, 30일 근사)
+      - "월"~"일" (한글 요일 — 다음 도래일, 같은 요일은 다음 주)
+      - ISO "YYYY-MM-DD" (이미 정규형이면 그대로 반환)
+    못 알아들으면 None.
+    """
+    from datetime import date, timedelta
+    token = token.strip()
+    today = date.today()
+
+    iso_m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", token)
+    if iso_m:
+        try:
+            return date(*(int(x) for x in iso_m.groups())).isoformat()
+        except ValueError:
+            return None
+
+    keywords = {"오늘": 0, "내일": 1, "모레": 2, "글피": 3, "어제": -1}
+    if token in keywords:
+        return (today + timedelta(days=keywords[token])).isoformat()
+
+    rel_m = re.match(r"^([+-])(\d+)([dwm]?)$", token)
+    if rel_m:
+        sign = 1 if rel_m.group(1) == "+" else -1
+        n = int(rel_m.group(2))
+        unit = rel_m.group(3) or "d"
+        days = n if unit == "d" else (n * 7 if unit == "w" else n * 30)
+        return (today + timedelta(days=sign * days)).isoformat()
+
+    if token in _KOREAN_WEEKDAYS:
+        target = _KOREAN_WEEKDAYS.index(token)
+        cur = today.weekday()
+        days_ahead = (target - cur) % 7 or 7   # 같은 요일은 다음 주로
+        return (today + timedelta(days=days_ahead)).isoformat()
+
+    return None
+
+
+def normalize_due_in_text(text: str) -> str:
+    """텍스트 안의 모든 !자연어 토큰을 !YYYY-MM-DD 로 치환."""
+    def _replace(m):
+        iso = parse_natural_due(m.group(1))
+        return f"!{iso}" if iso is not None else m.group(0)
+    return _DUE_TOKEN_RE.sub(_replace, text)
+
+
 def add_item(status_path: Path, text: str) -> None:
-    """STATUS.md에 '- [ ] text' 한 줄 추가 (마지막 체크박스 다음, 없으면 맨 끝)."""
+    """STATUS.md에 '- [ ] text' 한 줄 추가 (마지막 체크박스 다음, 없으면 맨 끝).
+
+    !자연어 마감 토큰(!오늘, !금, !+3 등)은 ISO 날짜로 정규화한 뒤 저장.
+    """
+    text = normalize_due_in_text(text)
     lines = status_path.read_text(encoding="utf-8").splitlines()
     last = -1
     for i, line in enumerate(lines):

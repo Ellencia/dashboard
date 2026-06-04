@@ -446,6 +446,8 @@ class DashboardWidget:
         self._icon_button(bar, "✕", self._on_close, tip="닫기", hover="#e0556b")
         self._icon_button(bar, "—", self._toggle_collapse, tip="접기 / 펴기")
         self._icon_button(bar, "⚙", self._open_settings, tip="설정")
+        self._icon_button(bar, "?", self._show_shortcuts_popup,
+                          tip="단축키·입력 형식 안내")
         self._icon_button(bar, "↻", self.refresh, tip="새로고침")
 
         # 제목 표시줄 드래그로 창 이동
@@ -645,14 +647,16 @@ class DashboardWidget:
         btn.bind("<Button-1>", lambda e: self._new_project())
 
     def _draw_quick_input(self) -> None:
-        """빠른 입력 한 줄. 형식: `[프로젝트] 텍스트 #태그 !날짜`.
+        """빠른 입력 한 줄 + 포커스 시 형식 hint.
 
-        프로젝트 안 적으면 Inbox(받은 편지함)로. 빈 줄은 무시.
-        Enter 또는 + 버튼 클릭으로 추가. Ctrl+N으로 포커스.
+        형식: `[프로젝트] 텍스트 #태그 !날짜` (Enter 또는 + 클릭)
+        프로젝트 안 적으면 Inbox(받은 편지함)로. 빈 줄은 무시. Ctrl+N으로 포커스.
         """
         t = self.theme
-        row = tk.Frame(self.body, bg=t["bg"])
-        row.pack(fill="x", padx=12, pady=(6, 0))
+        wrap = tk.Frame(self.body, bg=t["bg"])
+        wrap.pack(fill="x", padx=12, pady=(6, 0))
+        row = tk.Frame(wrap, bg=t["bg"])
+        row.pack(fill="x")
         plus = tk.Label(row, text="+", bg=t["bg"], fg=t["accent"],
                         font=(FONT, 12, "bold"), cursor="hand2", padx=2)
         plus.pack(side="left")
@@ -662,6 +666,20 @@ class DashboardWidget:
                          relief="flat", font=(FONT, 9))
         entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self._quick_entry = entry
+        # 포커스 받으면 형식 hint 표시, 잃으면 숨김
+        hint = tk.Label(
+            wrap,
+            text="[프로젝트] 내용 #태그 !날짜  ·  자연어: !오늘 !내일 !금 !+3 !+1w",
+            bg=t["bg"], fg=t["subtext"], font=(FONT, 7), anchor="w")
+
+        def show_hint(_e=None):
+            hint.pack(fill="x", padx=(22, 0), pady=(1, 0))
+
+        def hide_hint(_e=None):
+            hint.pack_forget()
+
+        entry.bind("<FocusIn>", show_hint, add="+")
+        entry.bind("<FocusOut>", hide_hint, add="+")
 
         def submit(_e=None) -> str | None:
             line = self._quick_var.get().strip()
@@ -774,6 +792,24 @@ class DashboardWidget:
         self._last_draw_fp = None
         self.refresh()
 
+    def _show_shortcuts_popup(self) -> None:
+        """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
+        m = _PopupMenu(self.root, self.theme)
+        m.add("Ctrl + F     검색 토글", lambda: None)
+        m.add("Ctrl + N     빠른 입력에 포커스", lambda: None)
+        m.add("Esc          검색·필터 해제", lambda: None)
+        m.add_separator()
+        m.add("↕ 핸들 드래그   할 일·카드 순서 바꾸기", lambda: None)
+        m.add("카드 우클릭    편집·접기·숨기기", lambda: None)
+        m.add("◢ 그립 드래그   위젯 크기 조절", lambda: None)
+        m.add_separator()
+        m.add("입력 형식    [프로젝트] 텍스트 #태그 !날짜", lambda: None)
+        m.add("자연어 마감   !오늘 !내일 !금 !+3 !+1w", lambda: None)
+        # 제목 표시줄 가운데 즈음
+        x = self.root.winfo_rootx() + max(40, self.width // 2 - 130)
+        y = self.root.winfo_rooty() + TITLEBAR_H
+        m.popup(x, y)
+
     def _focus_quick_input(self) -> None:
         """Ctrl+N — 빠른 입력 칸에 포커스."""
         if getattr(self, "_quick_entry", None) is not None:
@@ -831,6 +867,18 @@ class DashboardWidget:
         percent_lbl = tk.Label(top, text=f"{proj.percent}%", bg=t["card"],
                                fg=t["text"], font=(FONT, 10, "bold"))
         percent_lbl.pack(side="right")
+        # 이 프로젝트의 가장 임박한 마감 todo를 작은 배지로 (% 왼쪽)
+        nearest_due = ""
+        for it in proj.todos:
+            if it.due and (not nearest_due or it.due < nearest_due):
+                nearest_due = it.due
+        if nearest_due:
+            info = _due_badge(nearest_due)
+            if info is not None:
+                label, color = info
+                tk.Label(top, text=label, bg=color, fg="#1e1e2e",
+                         font=(FONT, 7, "bold"), padx=4).pack(
+                    side="right", padx=(0, 6))
 
         # 진행바 (접혀 있어도 표시 — 진행률은 한눈에 보이게)
         bar_canvas = self._draw_progress_bar(inner, proj.percent)
