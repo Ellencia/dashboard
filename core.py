@@ -547,6 +547,35 @@ def rename_item(status_path: Path, old_text: str, new_text: str) -> None:
     _write_lines(status_path, lines)
 
 
+def move_item(src_status: Path, dst_status: Path, text: str) -> bool:
+    """src STATUS.md에서 해당 줄을 빼서 dst STATUS.md에 추가. 체크 상태 유지.
+
+    성공하면 True, src에서 항목 못 찾으면 False.
+    """
+    src_lines = src_status.read_text(encoding="utf-8").splitlines()
+    moved = None
+    for i, line in enumerate(src_lines):
+        m = _CHECK_RE.match(line)
+        if m and m.group(2) == text:
+            moved = src_lines.pop(i)
+            break
+    if moved is None:
+        return False
+    _write_lines(src_status, src_lines)
+    # dst엔 마지막 체크박스 줄 다음 (없으면 끝)에 그대로 (체크 상태 유지) 삽입
+    dst_lines = dst_status.read_text(encoding="utf-8").splitlines()
+    last = -1
+    for i, line in enumerate(dst_lines):
+        if _CHECK_RE.match(line):
+            last = i
+    if last >= 0:
+        dst_lines.insert(last + 1, moved)
+    else:
+        dst_lines.append(moved)
+    _write_lines(dst_status, dst_lines)
+    return True
+
+
 def delete_item(status_path: Path, text: str) -> None:
     """STATUS.md에서 해당 텍스트의 체크박스 줄을 삭제."""
     lines = status_path.read_text(encoding="utf-8").splitlines()

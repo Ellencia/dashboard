@@ -202,6 +202,65 @@ class _ProjectEditor:
         if self.cfg is not None:
             self.win.bind("<FocusIn>", self._on_focus_in)
 
+    def _show_move_picker(self, anchor_widget: tk.Widget, text: str,
+                          row_ref: dict) -> None:
+        """이 행을 다른 프로젝트로 이동 — 다크 팝업으로 대상 선택."""
+        if self.cfg is None:
+            return
+        # 이동 가능한 대상 = 자기 자신 외 모든 프로젝트
+        candidates = [
+            p for p in core.scan_projects(self.cfg)
+            if p.folder.name != self.folder_name
+        ]
+        if not candidates:
+            return
+        t = self.theme
+        win = tk.Toplevel(self.win)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=t["bar_bg"])
+        body = tk.Frame(win, bg=t["card"])
+        body.pack(padx=1, pady=1)
+        tk.Label(body, text="옮길 프로젝트", bg=t["card"], fg=t["subtext"],
+                 font=(FONT, 8), anchor="w", padx=14, pady=3).pack(fill="x")
+        tk.Frame(body, bg=t["bar_bg"], height=1).pack(fill="x", padx=6)
+
+        def do_move(target):
+            ok = core.move_item(self.status_path,
+                                target.folder / core.STATUS_FILENAME, text)
+            win.destroy()
+            if ok:
+                try:
+                    self._row_widgets.remove(row_ref)
+                except ValueError:
+                    pass
+                row_ref["row"].destroy()
+                self.on_change()
+
+        for proj in candidates:
+            r = tk.Label(body, text=f"→ {proj.name}", bg=t["card"],
+                         fg=t["text"], font=(FONT, 9), anchor="w", padx=16,
+                         pady=5, cursor="hand2")
+            r.pack(fill="x")
+            r.bind("<Enter>",
+                   lambda e, rr=r: rr.configure(bg=t["accent"], fg="#ffffff"))
+            r.bind("<Leave>",
+                   lambda e, rr=r: rr.configure(bg=t["card"], fg=t["text"]))
+            r.bind("<Button-1>", lambda e, p=proj: do_move(p))
+
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        # 클릭한 ↗ 버튼 근처에 띄움
+        x = anchor_widget.winfo_rootx()
+        y = anchor_widget.winfo_rooty() + anchor_widget.winfo_height()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = max(0, min(x, win.winfo_screenwidth() - w - 4))
+        y = max(0, min(y, win.winfo_screenheight() - h - 4))
+        win.geometry(f"+{x}+{y}")
+        win.focus_force()
+        win.after(60, lambda: win.bind(
+            "<FocusOut>", lambda e: win.destroy()))
+
     def _on_focus_in(self, _event=None) -> None:
         """편집창에 포커스가 돌아올 때 파일에서 다시 읽어 체크 상태 동기화."""
         if self.cfg is None:
@@ -280,6 +339,16 @@ class _ProjectEditor:
                           font=(FONT, 9), cursor="hand2", width=2)
         delbtn.pack(side="right")
         delbtn.bind("<Button-1>", lambda e: on_delete())
+
+        # cfg가 있으면 다른 프로젝트로 이동 가능 — Inbox 활용의 핵심
+        if self.cfg is not None:
+            def on_move(_e=None):
+                self._show_move_picker(row, state["text"], row_ref)
+
+            movebtn = tk.Label(row, text="↗", bg=t["bg"], fg=t["subtext"],
+                               font=(FONT, 9), cursor="hand2", width=2)
+            movebtn.pack(side="right")
+            movebtn.bind("<Button-1>", on_move)
 
         _bind_wheel(row, self.canvas)
 
