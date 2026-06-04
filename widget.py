@@ -1706,32 +1706,26 @@ class DashboardWidget:
             self._fit_todo_canvas_to_available(view_h)
 
     def _fit_todo_canvas_to_available(self, view_h: int) -> None:
-        """할 일 스크롤 영역 높이를 본문 가용 공간에 맞춤.
+        """할 일 스크롤 영역을 본문 가용 공간 전체로 확장 (사용자 지정 크기일 때).
 
-        본문 전체 reqheight에서 현재 할 일 캔버스 높이를 뺀 게 'chrome'(다른
-        모든 요소가 차지하는 높이). view_h에서 chrome을 빼면 할 일 영역에
-        쓸 수 있는 가용 높이가 나옴. 내용보다 크게는 안 키워(빈 공간 방지).
+        chrome_h = 본문 reqheight - 현재 할 일 캔버스 높이 (다른 모든 요소).
+        available = view_h - chrome_h = 할 일 영역이 차지할 수 있는 높이.
+
+        할 일 영역을 항상 available 만큼 키움 — 내용이 작으면 그 안에 빈
+        BG(자연스러움), 크면 그 안에서 스크롤. 이렇게 안 하면 외부 canvas
+        아래에 빈 BG가 떠 사용자가 "상단 여백" 으로 인식함.
 
         주의: update_idletasks()는 호출하지 않음 — 드래그 중 모션마다 호출
-        하면 동기 재페인트로 깜빡임/체크박스 사라짐 현상이 발생함. winfo 값이
-        한 프레임 stale해도 다음 모션에서 보정되므로 무방.
+        하면 동기 재페인트로 깜빡임 발생.
         """
         if self._todo_canvas is None or not self._todo_canvas.winfo_exists():
             return
         inner_h_now = self._todo_canvas.winfo_height()
         chrome_h = self.body.winfo_reqheight() - inner_h_now
         available = max(60, view_h - chrome_h)
-        # 할 일 내용 자체 자연 높이는 scrollregion에서 추출
-        sr = self._todo_canvas.cget("scrollregion") or ""
-        try:
-            _, _, _, sr_h = (float(x) for x in sr.split())
-            content_h = int(sr_h)
-        except ValueError:
-            content_h = inner_h_now
-        new_h = min(content_h, available)
-        # 작은 변화는 무시 — 매 모션 이벤트마다 configure 호출하지 않게 임계치 둠
-        if abs(new_h - inner_h_now) > 4:
-            self._todo_canvas.configure(height=new_h)
+        # 작은 변화는 무시 — 모션 이벤트마다 configure 호출 안 함
+        if abs(available - inner_h_now) > 4:
+            self._todo_canvas.configure(height=available)
 
     def _hotkey_poll(self) -> None:
         """전역 단축키·중복실행 신호를 받아 처리 (큐 → tkinter 스레드)."""
