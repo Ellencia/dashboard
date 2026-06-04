@@ -1684,25 +1684,29 @@ class DashboardWidget:
         self.refresh()
 
     def _resize_to_content(self) -> None:
-        """창 크기 결정 — 사용자가 정한 높이가 있으면 그걸 쓰고, 없으면 내용에 맞춤.
+        """창 크기 결정 — 사용자 지정 크기와 자연 크기 중 작은 쪽 사용.
 
-        wcfg["height"] = 0 (기본): 내용 높이에 맞춰 자동 크기 (화면 -160px 상한).
-        wcfg["height"] > 0      : 사용자가 그립으로 정한 크기를 그대로 사용
-                                  (내용이 더 작으면 빈 공간, 크면 본문이 스크롤).
-        사용자가 정한 크기일 땐 할 일 스크롤 영역도 가용 공간만큼 늘림.
+        - wcfg["height"] = 0: 자연 크기 (내용 + 화면 -160px 상한).
+        - wcfg["height"] > 0:
+            user가 자연 크기보다 큼 → 자연 크기로 snap (빈 공간 방지)
+            user가 자연 크기보다 작음 → user 크기 사용, 할 일 영역에 가용 공간을 줘 그 안에서 스크롤
+        이렇게 하면 어디에도 의미없는 빈 공간이 안 남음.
         """
         self.body.update_idletasks()
+        content_h = self.body.winfo_reqheight()
+        max_h = self.root.winfo_screenheight() - 160
+        natural_view_h = max(60, min(content_h, max_h))
         user_h = int(self.wcfg.get("height", 0))
         if user_h > 0:
-            view_h = max(60, user_h - TITLEBAR_H)
+            user_view_h = max(60, user_h - TITLEBAR_H)
+            # 사용자가 자연 크기보다 크게 잡았으면 자연 크기로 snap (빈 BG 안 만듦)
+            view_h = min(user_view_h, natural_view_h)
         else:
-            content_h = self.body.winfo_reqheight()
-            max_h = self.root.winfo_screenheight() - 160
-            view_h = max(60, min(content_h, max_h))
+            view_h = natural_view_h
         self.canvas.configure(height=view_h)
         self.root.geometry(f"{self.width}x{TITLEBAR_H + view_h}")
-        # 사용자 지정 크기에서만 할 일 영역을 늘림 (자동 모드는 기존 동작 유지)
-        if user_h > 0:
+        # 사용자가 작게 잡아 내용이 안 들어갈 때만 할 일 영역 축소(외부 스크롤 대신 내부 스크롤로)
+        if user_h > 0 and view_h < natural_view_h:
             self._fit_todo_canvas_to_available(view_h)
 
     def _fit_todo_canvas_to_available(self, view_h: int) -> None:
