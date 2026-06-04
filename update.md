@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 편집창 stale 표시 수정 — retained-mode 토글 후 우클릭 메뉴의 closure에 잡힌 옛 proj.items가 그대로 편집창에 넘어가 파일은 [x]인데 편집창엔 ☐로 보이던 회귀. _fresh_proj 헬퍼로 액션 시점에 scan_projects 다시 호출해 최신 proj 객체 전달
 - 프로젝트 템플릿 — `templates/*.md`를 새 프로젝트 다이얼로그의 드롭다운에서 선택. {{name}} 치환. 기본 셋: 전광판 시공, 소프트웨어 개발, 주간 업무
 - 주간 완료 통계 배지 — 요약 줄에 📈 이번주 N (↑M / ↓M / =) 표시. 토글 시 `_history.jsonl`에 완료 이벤트 append (외부 편집 줄바꿈 안전장치 포함)
 - 트레이 마감 알림 — 시작 10초 뒤 첫 검사, 이후 30분마다 _drop 폴더 검사와 같은 주기로 due_soon_todos 호출. 지났거나 오늘/내일 마감 todo에 pystray.notify로 토스트. 같은 항목은 하루 1회만 알림 (notified set, 자정 리셋)

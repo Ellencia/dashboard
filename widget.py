@@ -1334,12 +1334,26 @@ class DashboardWidget:
         except (tk.TclError, AttributeError, KeyError):
             return False
 
+    def _fresh_proj(self, folder_name: str):
+        """folder.name으로 최신 Project 객체를 다시 읽어 반환 (없으면 None).
+
+        Retained-mode 토글 이후엔 closure에 잡힌 옛 proj.items가 stale해서
+        편집창 등이 옛 상태를 보임. 이 헬퍼로 액션 시점에 최신화.
+        """
+        for p in scan_projects(self.cfg):
+            if p.folder.name == folder_name:
+                return p
+        return None
+
     def _show_project_menu(self, event, proj) -> None:
         """프로젝트 카드 우클릭 메뉴 — 접기 / 숨기기 / 파일 열기."""
         m = _PopupMenu(self.root, self.theme)
+        # 편집창은 액션 시점에 최신 proj로 — closure의 옛 items가 stale일 수 있음
         m.add("편집...",
               lambda: editor.open_project_editor(
-                  self.root, proj, self.theme, self.refresh))
+                  self.root,
+                  self._fresh_proj(proj.folder.name) or proj,
+                  self.theme, self.refresh))
         m.add("펴기" if proj.collapsed else "접기",
               lambda: self._toggle_project_collapsed(proj))
         m.add(f"'{proj.name}' 숨기기",
