@@ -350,6 +350,7 @@ class DashboardWidget:
         self._settings_win: tk.Toplevel | None = None
         self._icon_buttons: list[tk.Label] = []
         self._todo_canvas: tk.Canvas | None = None   # 할 일 영역 내부 스크롤
+        self._snap_indicator: tk.Frame | None = None   # 리사이즈 시 snap 가이드선
         # 깜빡임 방지: 마지막으로 그린 내용의 지문 — 같으면 redraw 건너뜀
         self._last_draw_fp = None
         self._footer_label: tk.Label | None = None
@@ -527,6 +528,10 @@ class DashboardWidget:
         self._resize_h0 = self.root.winfo_height()
         self._resize_x0 = event.x_root
         self._resize_y0 = event.y_root
+        # snap 안내선용 — 자연 크기를 한 번만 계산 (드래그 중엔 컨텐츠가
+        # 안 바뀌므로 stale해도 무관)
+        self.body.update_idletasks()
+        self._resize_natural_h = (self.body.winfo_reqheight() + TITLEBAR_H)
 
     def _on_resize(self, event) -> None:
         """드래그 중에는 창 크기(root.geometry)만 갱신 — 매끄럽게.
@@ -535,17 +540,49 @@ class DashboardWidget:
         시점에만 한 번. 안 그러면 매 모션마다 body.winfo_reqheight + 자식
         layout 재계산이 30~60Hz로 발생해 저프레임처럼 느껴짐.
 
-        자연 크기 상한을 모션 중에 캡하지 않음 — 컨텐츠가 작은 상태에서
-        드래그 시작하면 그 자연 크기에 갇히기 때문. release 시점에
-        _resize_to_content가 자연 크기로 snap 처리함.
+        자연 크기보다 더 끌면 그 지점에 강조색 가이드선 → "여기서 자동 줄어듦" 안내.
         """
         new_w = max(240, self._resize_w0 + (event.x_root - self._resize_x0))
         new_h = max(TITLEBAR_H + 60,
                     self._resize_h0 + (event.y_root - self._resize_y0))
         self.root.geometry(f"{new_w}x{new_h}")
+        # 자연 크기 넘기면 snap 위치에 가이드선 표시
+        if new_h > self._resize_natural_h + 4:
+            self._show_snap_indicator(self._resize_natural_h, new_w)
+        else:
+            self._hide_snap_indicator()
+
+    def _show_snap_indicator(self, snap_y: int, width: int) -> None:
+        """자연 크기 위치에 강조색 가로선 + 작은 라벨 — 거기까지 줄어든다는 표시."""
+        t = self.theme
+        if self._snap_indicator is None:
+            wrap = tk.Frame(self.root, bg=self.root.cget("bg"))
+            line = tk.Frame(wrap, bg=t["accent"], height=2)
+            line.pack(fill="x")
+            tag = tk.Label(wrap, text="↕ 여기까지 자동 조절",
+                           bg=t["accent"], fg="#1e1e2e",
+                           font=(FONT, 7, "bold"), padx=4)
+            tag.pack(anchor="e")
+            self._snap_indicator = wrap
+        self._snap_indicator.place(x=0, y=snap_y - 1, width=width)
+        self._snap_indicator.lift()
+
+    def _hide_snap_indicator(self) -> None:
+        if self._snap_indicator is not None:
+            try:
+                self._snap_indicator.place_forget()
+            except tk.TclError:
+                pass
 
     def _end_resize(self, event) -> None:
         """리사이즈 종료 — 본문 너비·내부 캔버스·텍스트 줄바꿈을 한 번에 갱신."""
+        # snap 가이드선 정리
+        if self._snap_indicator is not None:
+            try:
+                self._snap_indicator.destroy()
+            except tk.TclError:
+                pass
+            self._snap_indicator = None
         self.width = self.root.winfo_width()
         self.canvas.itemconfigure(self._body_id, width=self.width)
         self.wcfg["width"] = self.width
