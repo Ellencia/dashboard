@@ -137,6 +137,8 @@ DEFAULT_CONFIG = {
         "todos_max_height": 240,   # 할 일 목록 영역 최대 높이(px) — 넘으면 스크롤
         "tag_colors": {},     # 사용자가 지정한 태그→hex색 매핑 (없으면 해시 팔레트)
         "todos_collapsed": False,  # 할 일 목록을 접어 뒀는지
+        "sort_by_due": False,      # 할 일을 마감일순으로 정렬할지 (켜면 드래그 비활성)
+        "show_completed": False,   # 완료된 할 일도 함께 표시할지
         "collapse_highlight": True,  # 접었을 때 제목 막대를 강조색으로
         "collapse_hotkey": "ctrl+alt+d",  # 접기/펴기 전역 단축키 (빈 값=끔)
         "hide_hotkey": "ctrl+alt+s",      # 닫기/열기 전역 단축키 (빈 값=끔)

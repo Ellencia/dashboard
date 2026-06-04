@@ -792,6 +792,22 @@ class DashboardWidget:
         self._last_draw_fp = None
         self.refresh()
 
+    def _toggle_sort_due(self) -> None:
+        """마감일순 정렬 ON/OFF (config에 저장 + 새로고침)."""
+        self.wcfg["sort_by_due"] = not bool(
+            self.wcfg.get("sort_by_due", False))
+        self._save_config_safe()
+        self._last_draw_fp = None
+        self.refresh()
+
+    def _toggle_show_completed(self) -> None:
+        """완료 보기 ON/OFF (config에 저장 + 새로고침)."""
+        self.wcfg["show_completed"] = not bool(
+            self.wcfg.get("show_completed", False))
+        self._save_config_safe()
+        self._last_draw_fp = None
+        self.refresh()
+
     def _show_shortcuts_popup(self) -> None:
         """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
         m = _PopupMenu(self.root, self.theme)
@@ -951,15 +967,23 @@ class DashboardWidget:
         collapsed_todos = sum(len(p.todos) for p in projects if p.collapsed)
         flt = self._tag_filter
         query = self._search_query().lower()
-        # 필터·검색 활성 시 각 프로젝트 todos를 추림
+        sort_by_due = bool(self.wcfg.get("sort_by_due", False))
+        show_done = bool(self.wcfg.get("show_completed", False))
+        # show_done이면 완료 항목도 포함하므로 active 기준을 items로 다시 잡음
+        if show_done:
+            active = [p for p in projects if not p.collapsed and p.items]
+        # 필터·검색·정렬·완료보기 활성 시 각 프로젝트 todos를 추림
         def todos_for(p):
+            src = p.items if show_done else p.todos
             out = []
-            for it in p.todos:
+            for it in src:
                 if flt is not None and flt not in it.tags:
                     continue
                 if query and query not in it.text.lower():
                     continue
                 out.append(it)
+            if sort_by_due:
+                out.sort(key=lambda it: it.due or "9999-99-99")
             return out
         active_filtered = [(p, todos_for(p)) for p in active]
         active_filtered = [(p, ts) for p, ts in active_filtered if ts]
@@ -996,6 +1020,25 @@ class DashboardWidget:
         search_btn.pack(side="right")
         search_btn.bind("<Button-1>", lambda e: self._toggle_search())
         _Tooltip(search_btn, "검색 (Ctrl+F · Esc로 해제)")
+        # 마감일순 정렬 토글
+        sort_btn = tk.Label(
+            header_row, text="📅",
+            bg=t["accent"] if sort_by_due else t["bg"],
+            fg="#1e1e2e" if sort_by_due else t["subtext"],
+            font=(FONT, 9), cursor="hand2", padx=3)
+        sort_btn.pack(side="right", padx=(0, 2))
+        sort_btn.bind("<Button-1>", lambda e: self._toggle_sort_due())
+        _Tooltip(sort_btn,
+                 "마감일순 정렬 (켜면 드래그 순서 변경 비활성)")
+        # 완료 보기 토글
+        done_btn = tk.Label(
+            header_row, text="✓",
+            bg=t["accent"] if show_done else t["bg"],
+            fg="#1e1e2e" if show_done else t["subtext"],
+            font=(FONT, 9, "bold"), cursor="hand2", padx=3)
+        done_btn.pack(side="right", padx=(0, 2))
+        done_btn.bind("<Button-1>", lambda e: self._toggle_show_completed())
+        _Tooltip(done_btn, "완료된 할 일 같이 보기 (☑ + 취소선)")
 
         # 검색 바 (활성 시) — 필터 배너보다 위에 둠
         if self._search_active and not collapsed:
@@ -1074,18 +1117,21 @@ class DashboardWidget:
             if not unlimited and shown >= max_todos:
                 break
             group_header = self._draw_todo_group_header(inner_frame, proj)
-            drag = _DragReorder(inner_frame, t)
+            # 마감일순 정렬 중에는 드래그가 의미 없어 등록 안 함
+            drag = _DragReorder(inner_frame, t) if not sort_by_due else None
             for item in todos_in_proj:
                 if not unlimited and shown >= max_todos:
                     break
                 handle, row = self._draw_todo_row(inner_frame, proj, item)
-                drag.add_row(handle, row, item)
+                if drag is not None:
+                    drag.add_row(handle, row, item)
                 # in-place 갱신용 — (folder, text)로 행 위젯 캐시
                 self._todo_row_refs[(proj.folder.name, item.text)] = row
                 shown += 1
-            drag.on_reorder = (
-                lambda new_items, p=proj: self._reorder_todos(p, new_items))
-            self._todo_drags.append(drag)
+            if drag is not None:
+                drag.on_reorder = (
+                    lambda new_items, p=proj: self._reorder_todos(p, new_items))
+                self._todo_drags.append(drag)
             # 그룹 끝에 그 프로젝트 전용 빠른 추가 입력칸
             self._draw_group_quick_add(inner_frame, proj)
             self._todo_group_refs[proj.folder.name] = {
@@ -1172,14 +1218,23 @@ class DashboardWidget:
 
         텍스트 안의 #태그 들은 떼어서 오른쪽 끝에 색 칩으로 표시.
         같은 태그는 항상 같은 색이라 한눈에 카테고리 구분이 됨.
+        완료 항목(show_completed 켰을 때 보임)은 ☑ + 취소선 + 흐린 색.
         """
         t = self.theme
+        sort_by_due = bool(self.wcfg.get("sort_by_due", False))
         row = tk.Frame(parent, bg=t["bg"])
         row.pack(fill="x", padx=10, pady=1)
 
-        handle = self._drag_handle(row, t["bg"])
-        handle.pack(side="left", padx=(0, 2))
-        box = tk.Label(row, text="☐", bg=t["bg"], fg=t["subtext"],
+        # 마감일순 정렬 모드에선 드래그가 의미 없어서 핸들 자리만 비워둠
+        if sort_by_due:
+            handle = tk.Label(row, text=" ", bg=t["bg"], width=2)
+            handle.pack(side="left", padx=(0, 2))
+        else:
+            handle = self._drag_handle(row, t["bg"])
+            handle.pack(side="left", padx=(0, 2))
+        box_text = "☑" if item.done else "☐"
+        box_fg = t["accent"] if item.done else t["subtext"]
+        box = tk.Label(row, text=box_text, bg=t["bg"], fg=box_fg,
                        font=(FONT, 11), cursor="hand2")
         box.pack(side="left")
 
@@ -1209,8 +1264,11 @@ class DashboardWidget:
         display = re.sub(r"\s+", " ", display).strip() or item.text
         # 칩·배지가 차지할 가로폭 (태그 1개당 ~35px, 마감 배지 ~40px)
         chip_room = 35 * len(item.tags) + due_extra
-        txt = tk.Label(row, text=display, bg=t["bg"], fg=t["text"],
-                       font=(FONT, 9), anchor="w", justify="left",
+        # 완료 항목은 흐린 색 + 취소선 (tk font의 4번째 modifier)
+        txt_font = (FONT, 9, "overstrike") if item.done else (FONT, 9)
+        txt_fg = t["subtext"] if item.done else t["text"]
+        txt = tk.Label(row, text=display, bg=t["bg"], fg=txt_fg,
+                       font=txt_font, anchor="w", justify="left",
                        cursor="hand2",
                        wraplength=max(80, self.width - 80 - chip_room))
         txt.pack(side="left", fill="x", expand=True, padx=(4, 0))
@@ -1311,6 +1369,8 @@ class DashboardWidget:
             tuple(sorted((self.wcfg.get("tag_colors") or {}).items())),
             self._search_active,
             self._search_query(),
+            bool(self.wcfg.get("sort_by_due", False)),
+            bool(self.wcfg.get("show_completed", False)),
         )
         return (proj_part, cfg_part)
 
@@ -1320,16 +1380,18 @@ class DashboardWidget:
     def _on_todo_click(self, proj, item) -> None:
         """할 일 줄 클릭 → STATUS.md의 체크 상태를 토글.
 
-        Retained-mode: 가능하면 전체 redraw 없이 해당 줄·카드·합계만 in-place
-        갱신해 사용자에게 0 페인트 경험을 줌. 실패하면 일반 refresh로 폴백.
-        위젯에서 보이는 줄은 항상 미완료라 클릭=완료로 전환 → 통계용 로그 남김.
+        Retained-mode: 미완료→완료 시 그 줄·카드·합계만 in-place 갱신.
+        완료→미완료(완료 보기 모드에서만 가능)는 행 복귀가 복잡해 일반 refresh.
+        실패하면 일반 refresh로 폴백.
         """
+        was_done = item.done
         toggle_item(item, proj.status_path)
-        log_completion(self.cfg, proj.folder.name, item.text)
+        if not was_done:
+            log_completion(self.cfg, proj.folder.name, item.text)
         new_projects = scan_projects(self.cfg)
         new_proj = next((p for p in new_projects
                          if p.folder.name == proj.folder.name), None)
-        if new_proj is None:
+        if new_proj is None or was_done:
             self.refresh()
             return
         if not self._inplace_toggle_todo(proj, item, new_proj, new_projects):
