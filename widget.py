@@ -694,6 +694,7 @@ class DashboardWidget:
 
         entry.bind("<Return>", submit)
         plus.bind("<Button-1>", submit)
+        self._attach_tag_completer(entry)
 
     def _draw_summary(self, projects: list) -> None:
         t = self.theme
@@ -807,6 +808,132 @@ class DashboardWidget:
         self._save_config_safe()
         self._last_draw_fp = None
         self.refresh()
+
+    def _get_all_tags(self) -> list[str]:
+        """모든 프로젝트의 unique 태그 알파벳순 목록 (자동완성 후보)."""
+        tags = set()
+        for p in scan_projects(self.cfg):
+            for it in p.items:
+                for tag in it.tags:
+                    tags.add(tag)
+        return sorted(tags)
+
+    def _attach_tag_completer(self, entry: tk.Entry) -> None:
+        """Entry에 #태그 자동완성 popup 부착.
+
+        '#' 친 직후부터 다음 공백/특수문자 전까지의 부분 문자열이 'partial'.
+        매칭 태그를 다크 Listbox로 entry 바로 아래에 띄움. ↑↓로 이동,
+        Enter/Tab 으로 선택, Esc 닫기. 빈 entry에서 #만 쳐도 전체 태그 표시.
+        """
+        state: dict = {"popup": None, "listbox": None}
+        t = self.theme
+
+        def get_tag_prefix():
+            text = entry.get()
+            cur = entry.index(tk.INSERT)
+            m = re.search(r"#([^\s#!]*)$", text[:cur])
+            return (m.start(), m.group(1)) if m else None
+
+        def close_popup():
+            if state["popup"] is not None:
+                try:
+                    state["popup"].destroy()
+                except tk.TclError:
+                    pass
+                state["popup"] = None
+                state["listbox"] = None
+
+        def show_popup(matches):
+            if state["popup"] is None:
+                popup = tk.Toplevel(entry)
+                popup.overrideredirect(True)
+                popup.attributes("-topmost", True)
+                popup.configure(bg=t["bar_bg"])
+                inner = tk.Frame(popup, bg=t["card"])
+                inner.pack(padx=1, pady=1)
+                lb = tk.Listbox(inner, bg=t["card"], fg=t["text"],
+                                selectbackground=t["accent"],
+                                selectforeground="#ffffff",
+                                relief="flat", font=(FONT, 9),
+                                borderwidth=0, highlightthickness=0,
+                                activestyle="none")
+                lb.pack(fill="both")
+                state["popup"] = popup
+                state["listbox"] = lb
+            lb = state["listbox"]
+            lb.delete(0, tk.END)
+            for tag in matches:
+                lb.insert(tk.END, tag)
+            lb.configure(height=min(6, len(matches)))
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(0)
+            # entry 바로 아래에 위치
+            state["popup"].update_idletasks()
+            x = entry.winfo_rootx()
+            y = entry.winfo_rooty() + entry.winfo_height()
+            state["popup"].geometry(f"+{x}+{y}")
+
+        def accept_selection():
+            if state["listbox"] is None:
+                return False
+            sel = state["listbox"].curselection()
+            if not sel:
+                return False
+            chosen = state["listbox"].get(sel[0])
+            info = get_tag_prefix()
+            if info is None:
+                return False
+            start, _ = info
+            text = entry.get()
+            cur = entry.index(tk.INSERT)
+            new_text = text[:start] + f"#{chosen}" + text[cur:]
+            entry.delete(0, tk.END)
+            entry.insert(0, new_text)
+            entry.icursor(start + len(chosen) + 1)
+            close_popup()
+            return True
+
+        def on_key(e):
+            # popup 활성 시 화살표/Enter/Tab/Esc 가로채기
+            if state["listbox"] is not None:
+                if e.keysym in ("Down", "Up"):
+                    lb = state["listbox"]
+                    cur = lb.curselection()
+                    if cur:
+                        new = cur[0] + (1 if e.keysym == "Down" else -1)
+                    else:
+                        new = 0
+                    if 0 <= new < lb.size():
+                        lb.selection_clear(0, tk.END)
+                        lb.selection_set(new)
+                        lb.see(new)
+                    return "break"
+                if e.keysym in ("Return", "Tab"):
+                    if accept_selection():
+                        return "break"
+                if e.keysym == "Escape":
+                    close_popup()
+                    return "break"
+
+            info = get_tag_prefix()
+            if info is None:
+                close_popup()
+                return None
+            _, partial = info
+            all_tags = self._get_all_tags()
+            if partial:
+                matches = [tg for tg in all_tags if partial.lower() in tg.lower()]
+            else:
+                matches = all_tags
+            if matches:
+                show_popup(matches)
+            else:
+                close_popup()
+            return None
+
+        entry.bind("<KeyRelease>", on_key, add="+")
+        entry.bind("<FocusOut>",
+                   lambda e: entry.after(200, close_popup), add="+")
 
     def _show_shortcuts_popup(self) -> None:
         """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
@@ -1183,6 +1310,7 @@ class DashboardWidget:
 
         ent.bind("<Return>", submit)
         plus.bind("<Button-1>", submit)
+        self._attach_tag_completer(ent)
 
     def _draw_todo_group_header(self, parent: tk.Widget, proj) -> tk.Frame:
         """할 일 목록 안에서 한 프로젝트 묶음의 소제목 + 태그별 개수 칩.
