@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- snap 후 inner 잔여 스크롤 제거 — 사용자 지정 크기 모드(`height>0`)에선 `todos_max_height` 캡 무시하고 inner_canvas를 inner_frame 내용 전체에 맞춤. 자동 모드에선 기존대로 cap. 자연 snap 후 inner 안에 작은 스크롤이 남던 불편 해결
 - 리사이즈 snap 가이드선 — 드래그 중 자연 크기보다 더 끌면 그 지점에 강조색 가로선 + "↕ 여기까지 자동 조절" 라벨 표시. 손 떼면 거기로 줄어들 거란 걸 미리 알려 줌. release 시 가이드선 destroy
 - 리사이즈 드래그 자연 크기 캡 제거 — 드래그 시작 시 snapshot한 `_resize_max_h`가 컨텐츠 작은 상태에선 너무 작아 위로 못 키우던 회귀. 캡 제거. 드래그는 자유롭게, release 시점에 `_resize_to_content`가 snap 처리
 - 리사이즈 드래그 매끄럽게 — 모션 중에는 `root.geometry`만 갱신, 본문 너비·할 일 영역 fit 등 무거운 레이아웃 캐스케이드는 release 시 한 번만. 자연 크기 상한도 드래그 시작 시 한 번만 계산(`_resize_max_h`)해 모션마다 호출 안 함. "저프레임 영상" 처럼 보이던 현상 해결

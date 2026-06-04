@@ -1307,11 +1307,17 @@ class DashboardWidget:
                 "header": group_header, "drag": drag,
             }
 
-        # 내용 높이에 맞춰 캔버스 높이 결정 (최대 todos_max_height 까지)
+        # 내용 높이에 맞춰 캔버스 높이 결정.
+        # 자동 크기 모드(height=0)에선 todos_max_height로 캡 — 위젯 무한 성장 방지.
+        # 사용자 지정 크기 모드(height>0)에선 cap 무시 — 내용 전체를 보여 inner
+        # 스크롤 자체를 없앰 (자연 snap 시 deezel inner-scroll 잔여물 없게).
         inner_frame.update_idletasks()
         max_h = int(self.wcfg.get("todos_max_height", 240))
         content_h = inner_frame.winfo_reqheight()
-        inner_canvas.configure(height=min(content_h, max_h))
+        if int(self.wcfg.get("height", 0)) > 0:
+            inner_canvas.configure(height=content_h)
+        else:
+            inner_canvas.configure(height=min(content_h, max_h))
 
         # 오버플로 안내는 스크롤 영역 밖(항상 보이는 자리)에 둠 (cap 켰을 때만)
         overflow = total - shown
