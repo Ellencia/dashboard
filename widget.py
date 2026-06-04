@@ -1038,6 +1038,8 @@ class DashboardWidget:
             drag.on_reorder = (
                 lambda new_items, p=proj: self._reorder_todos(p, new_items))
             self._todo_drags.append(drag)
+            # 그룹 끝에 그 프로젝트 전용 빠른 추가 입력칸
+            self._draw_group_quick_add(inner_frame, proj)
             self._todo_group_refs[proj.folder.name] = {
                 "header": group_header, "drag": drag,
             }
@@ -1054,6 +1056,39 @@ class DashboardWidget:
             tk.Label(self.body, text=f"…외 {overflow}개 (STATUS.md에서 확인)",
                      bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
                      anchor="w").pack(fill="x", padx=14, pady=(2, 0))
+
+    def _draw_group_quick_add(self, parent: tk.Widget, proj) -> None:
+        """프로젝트 묶음 끝에 그 프로젝트 전용 빠른 추가 한 줄.
+
+        [프로젝트] 안 적어도 그 카드 STATUS.md에 바로 추가. #태그·!날짜는
+        그대로 텍스트에 포함돼 저장(다음 scan에서 자연히 추출).
+        """
+        from core import add_item
+        t = self.theme
+        row = tk.Frame(parent, bg=t["bg"])
+        row.pack(fill="x", padx=10, pady=(1, 4))
+        plus = tk.Label(row, text="+", bg=t["bg"], fg=t["subtext"],
+                        font=(FONT, 10, "bold"), cursor="hand2", padx=4)
+        plus.pack(side="left")
+        var = tk.StringVar()
+        ent = tk.Entry(row, textvariable=var, bg=t["card"], fg=t["text"],
+                       insertbackground=t["text"], relief="flat",
+                       font=(FONT, 9))
+        ent.pack(side="left", fill="x", expand=True, padx=(2, 0))
+        _Tooltip(plus,
+                 f"'{proj.name}'에 할 일 추가 (Enter) — #태그 !날짜 가능")
+
+        def submit(_e=None):
+            text = var.get().strip()
+            if not text:
+                return
+            add_item(proj.status_path, text)
+            var.set("")
+            self._last_draw_fp = None
+            self.refresh()
+
+        ent.bind("<Return>", submit)
+        plus.bind("<Button-1>", submit)
 
     def _draw_todo_group_header(self, parent: tk.Widget, proj) -> tk.Frame:
         """할 일 목록 안에서 한 프로젝트 묶음의 소제목 + 태그별 개수 칩.
