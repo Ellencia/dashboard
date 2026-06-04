@@ -527,9 +527,6 @@ class DashboardWidget:
         self._resize_h0 = self.root.winfo_height()
         self._resize_x0 = event.x_root
         self._resize_y0 = event.y_root
-        # 자연 크기 상한을 한 번만 계산 (모션마다 winfo_reqheight 호출 안 함)
-        self.body.update_idletasks()
-        self._resize_max_h = self.body.winfo_reqheight() + TITLEBAR_H
 
     def _on_resize(self, event) -> None:
         """드래그 중에는 창 크기(root.geometry)만 갱신 — 매끄럽게.
@@ -537,12 +534,14 @@ class DashboardWidget:
         본문 너비, 할 일 영역 fit 등의 무거운 레이아웃 캐스케이드는 release
         시점에만 한 번. 안 그러면 매 모션마다 body.winfo_reqheight + 자식
         layout 재계산이 30~60Hz로 발생해 저프레임처럼 느껴짐.
+
+        자연 크기 상한을 모션 중에 캡하지 않음 — 컨텐츠가 작은 상태에서
+        드래그 시작하면 그 자연 크기에 갇히기 때문. release 시점에
+        _resize_to_content가 자연 크기로 snap 처리함.
         """
         new_w = max(240, self._resize_w0 + (event.x_root - self._resize_x0))
         new_h = max(TITLEBAR_H + 60,
                     self._resize_h0 + (event.y_root - self._resize_y0))
-        # 자연 크기보다 더 키워봐야 release 후 snap되니 드래그 단계에서 캡
-        new_h = min(new_h, self._resize_max_h)
         self.root.geometry(f"{new_w}x{new_h}")
 
     def _end_resize(self, event) -> None:
