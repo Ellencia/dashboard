@@ -527,22 +527,28 @@ class DashboardWidget:
         self._resize_h0 = self.root.winfo_height()
         self._resize_x0 = event.x_root
         self._resize_y0 = event.y_root
+        # 자연 크기 상한을 한 번만 계산 (모션마다 winfo_reqheight 호출 안 함)
+        self.body.update_idletasks()
+        self._resize_max_h = self.body.winfo_reqheight() + TITLEBAR_H
 
     def _on_resize(self, event) -> None:
-        """드래그 중 실시간으로 창 크기 갱신 (저장은 손을 뗀 뒤에)."""
+        """드래그 중에는 창 크기(root.geometry)만 갱신 — 매끄럽게.
+
+        본문 너비, 할 일 영역 fit 등의 무거운 레이아웃 캐스케이드는 release
+        시점에만 한 번. 안 그러면 매 모션마다 body.winfo_reqheight + 자식
+        layout 재계산이 30~60Hz로 발생해 저프레임처럼 느껴짐.
+        """
         new_w = max(240, self._resize_w0 + (event.x_root - self._resize_x0))
         new_h = max(TITLEBAR_H + 60,
                     self._resize_h0 + (event.y_root - self._resize_y0))
+        # 자연 크기보다 더 키워봐야 release 후 snap되니 드래그 단계에서 캡
+        new_h = min(new_h, self._resize_max_h)
         self.root.geometry(f"{new_w}x{new_h}")
-        # 자식들이 새 너비로 wrap 되도록 캔버스 안 본문 너비도 갱신
-        self.width = new_w
-        self.canvas.itemconfigure(self._body_id, width=new_w)
-        # 할 일 영역도 함께 늘려 라이브 미리보기
-        self._fit_todo_canvas_to_available(new_h - TITLEBAR_H)
 
     def _end_resize(self, event) -> None:
-        """리사이즈 종료 — 새 크기를 저장하고 다시 그림 (텍스트 줄바꿈 재계산)."""
+        """리사이즈 종료 — 본문 너비·내부 캔버스·텍스트 줄바꿈을 한 번에 갱신."""
         self.width = self.root.winfo_width()
+        self.canvas.itemconfigure(self._body_id, width=self.width)
         self.wcfg["width"] = self.width
         self.wcfg["height"] = self.root.winfo_height()
         self._save_config_safe()

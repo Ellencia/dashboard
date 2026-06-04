@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 리사이즈 드래그 매끄럽게 — 모션 중에는 `root.geometry`만 갱신, 본문 너비·할 일 영역 fit 등 무거운 레이아웃 캐스케이드는 release 시 한 번만. 자연 크기 상한도 드래그 시작 시 한 번만 계산(`_resize_max_h`)해 모션마다 호출 안 함. "저프레임 영상" 처럼 보이던 현상 해결
 - 위젯 크기 snap — 사용자 지정 높이(그립 드래그)가 자연 크기(내용+chrome)보다 크면 자연 크기로 snap. inner canvas에 빈 BG가 생기던 회귀 해결. `user_h`가 자연 크기보다 작을 때만 `_fit_todo_canvas_to_available` 호출해 할 일 영역 내부 스크롤로 처리. 어디에도 빈 공간 남지 않음
 - 사용자 지정 크기에서 외부 canvas 빈 BG 제거 — `_fit_todo_canvas_to_available`가 min(content, available) 대신 available 전체 사용. 본문이 외부 canvas를 꽉 채워 "본문 위/아래에 의미없는 여백" 현상 해결. todo 내용이 작으면 todo 영역 안에 빈 BG(자연스러움), 크면 그 안에서 스크롤
 - 태그 자동완성 — 빠른 입력칸·그룹별 입력칸에서 `#` 친 직후부터 다크 Listbox로 기존 태그 후보 표시. ↑↓ 선택, Enter/Tab 확정, Esc 닫기. partial 으로 필터링. 같은 카테고리를 여러 변형으로 흩뿌리는 것 방지
