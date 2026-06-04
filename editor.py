@@ -114,13 +114,19 @@ class CheckLabel:
 class _ProjectEditor:
     """프로젝트 한 개의 STATUS.md / update.md 를 편집하는 창."""
 
-    def __init__(self, parent_root, project, theme, on_change) -> None:
+    def __init__(self, parent_root, project, theme, on_change,
+                 cfg: dict | None = None) -> None:
         self.theme = theme
         self.on_change = on_change
         self.status_path = project.status_path
         self.update_path = project.folder / core.UPDATE_FILENAME
         self.name = project.name
         self.note = project.note
+        # cfg가 있으면 위젯에서 토글된 변경을 편집창이 포커스 받을 때 동기화
+        self.cfg = cfg
+        self.folder_name = project.folder.name
+        # 행의 (state, CheckLabel) 참조 — 동기화 / 삭제 정리용
+        self._row_widgets: list[dict] = []
         t = theme
 
         self.win = tk.Toplevel(parent_root)
@@ -192,6 +198,27 @@ class _ProjectEditor:
         # 내용을 다 채운 뒤 제목 표시줄을 다크로 (크기가 잡힌 후라야 함)
         apply_dark_titlebar(self.win)
 
+        # 위젯에서 토글한 변경이 편집창에 반영되도록 — 포커스 받으면 파일과 동기화
+        if self.cfg is not None:
+            self.win.bind("<FocusIn>", self._on_focus_in)
+
+    def _on_focus_in(self, _event=None) -> None:
+        """편집창에 포커스가 돌아올 때 파일에서 다시 읽어 체크 상태 동기화."""
+        if self.cfg is None:
+            return
+        try:
+            fresh = next((p for p in core.scan_projects(self.cfg)
+                          if p.folder.name == self.folder_name), None)
+            if fresh is None:
+                return
+            done_by_text = {it.text: it.done for it in fresh.items}
+            for r in self._row_widgets:
+                txt = r["state"].get("text")
+                if txt in done_by_text:
+                    r["check"].set(done_by_text[txt])
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     def _field_row(self, parent, label, var, save_fn) -> None:
         """라벨 + 입력칸 한 줄. 입력칸은 Enter/포커스 이동 시 저장."""
@@ -216,7 +243,11 @@ class _ProjectEditor:
             core.set_item_done(self.status_path, state["text"], checked)
             self.on_change()
 
-        CheckLabel(row, t, checked=done, command=on_check).pack(side="left")
+        check = CheckLabel(row, t, checked=done, command=on_check)
+        check.pack(side="left")
+        # 동기화용 ref 보관 (포커스 받을 때 파일 상태로 갱신)
+        row_ref = {"row": row, "state": state, "check": check}
+        self._row_widgets.append(row_ref)
 
         text_var = tk.StringVar(value=text)
         ent = _entry(row, t, text_var)
@@ -237,6 +268,11 @@ class _ProjectEditor:
 
         def on_delete():
             core.delete_item(self.status_path, state["text"])
+            # row_widgets에서 정리
+            try:
+                self._row_widgets.remove(row_ref)
+            except ValueError:
+                pass
             row.destroy()
             self.on_change()
 
@@ -282,9 +318,10 @@ class _ProjectEditor:
         self.on_change()
 
 
-def open_project_editor(parent_root, project, theme, on_change) -> None:
-    """프로젝트 편집 창을 엶."""
-    _ProjectEditor(parent_root, project, theme, on_change)
+def open_project_editor(parent_root, project, theme, on_change,
+                        cfg: dict | None = None) -> None:
+    """프로젝트 편집 창을 엶. cfg를 넘기면 포커스 시 파일과 자동 동기화."""
+    _ProjectEditor(parent_root, project, theme, on_change, cfg)
 
 
 def open_new_project(parent_root, root_dir, theme, on_change) -> None:

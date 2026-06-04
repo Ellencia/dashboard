@@ -1348,12 +1348,13 @@ class DashboardWidget:
     def _show_project_menu(self, event, proj) -> None:
         """프로젝트 카드 우클릭 메뉴 — 접기 / 숨기기 / 파일 열기."""
         m = _PopupMenu(self.root, self.theme)
-        # 편집창은 액션 시점에 최신 proj로 — closure의 옛 items가 stale일 수 있음
+        # 편집창은 액션 시점에 최신 proj로 + cfg를 함께 넘겨 포커스 받을 때마다
+        # 파일과 자동 동기화 (위젯에서 토글한 변경이 즉시 반영되도록)
         m.add("편집...",
               lambda: editor.open_project_editor(
                   self.root,
                   self._fresh_proj(proj.folder.name) or proj,
-                  self.theme, self.refresh))
+                  self.theme, self.refresh, self.cfg))
         m.add("펴기" if proj.collapsed else "접기",
               lambda: self._toggle_project_collapsed(proj))
         m.add(f"'{proj.name}' 숨기기",
