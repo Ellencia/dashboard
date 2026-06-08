@@ -1036,6 +1036,48 @@ class DashboardWidget:
         self._last_draw_fp = None
         self.refresh()
 
+    def _show_project_due_picker(self, proj, anchor: tk.Widget) -> None:
+        """프로젝트 자체 마감을 빠르게 설정하는 다크 팝업.
+
+        todo 마감 picker와 같은 패턴 — 다만 프리셋이 더 멀리 잡힘
+        (프로젝트 마감은 보통 며칠~수개월 단위라 +1주 / +1개월 / +3개월).
+        """
+        from core import parse_natural_due
+        presets = [
+            ("오늘", "오늘"),
+            ("내일", "내일"),
+            ("이번 주 금", "금"),
+            ("다음 주 월", "월"),
+            ("+ 1주", "+1w"),
+            ("+ 2주", "+2w"),
+            ("+ 1개월", "+1m"),
+            ("+ 3개월", "+3m"),
+        ]
+        m = _PopupMenu(self.root, self.theme)
+        for label, token in presets:
+            iso = parse_natural_due(token)
+            if iso is None:
+                continue
+            m.add(f"{label}    {iso}",
+                  lambda iso_=iso: self._set_project_due(proj, iso_))
+        if proj.due:
+            m.add_separator()
+            m.add(f"마감 제거  ({proj.due})",
+                  lambda: self._set_project_due(proj, ""))
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height()
+        m.popup(x, y)
+
+    def _set_project_due(self, proj, iso_date: str) -> None:
+        """프로젝트 STATUS.md '# 제목' 줄의 마감을 갈아끼움 + refresh."""
+        from core import set_project_due
+        try:
+            set_project_due(proj.status_path, iso_date)
+        except OSError:
+            return
+        self._last_draw_fp = None
+        self.refresh()
+
     def _show_shortcuts_popup(self) -> None:
         """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
         m = _PopupMenu(self.root, self.theme)
@@ -1119,10 +1161,30 @@ class DashboardWidget:
         if nearest_due:
             info = _due_badge(nearest_due)
             if info is not None:
-                label, color = info
-                tk.Label(top, text=label, bg=color, fg="#1e1e2e",
+                near_text, near_color = info
+                tk.Label(top, text=near_text, bg=near_color, fg="#1e1e2e",
                          font=(FONT, 7, "bold"), padx=4).pack(
                     side="right", padx=(0, 6))
+        # 프로젝트 자체 마감 — 🏁 접두로 todo 배지와 시각 구분, 클릭 시 picker
+        proj_due_info = _due_badge(proj.due) if proj.due else None
+        if proj_due_info is not None:
+            pd_text, pd_color = proj_due_info
+            proj_due_widget = tk.Label(
+                top, text=f"🏁 {pd_text}", bg=pd_color, fg="#1e1e2e",
+                font=(FONT, 7, "bold"), padx=4, cursor="hand2")
+        else:
+            # 마감 없을 땐 무딘 🏁 — 클릭으로 설정
+            proj_due_widget = tk.Label(
+                top, text="🏁", bg=t["card"], fg=t["subtext"],
+                font=(FONT, 9), cursor="hand2")
+        proj_due_widget.pack(side="right", padx=(0, 6))
+        proj_due_widget.bind(
+            "<Button-1>",
+            lambda e, p=proj, w=proj_due_widget:
+            self._show_project_due_picker(p, w))
+        _Tooltip(proj_due_widget,
+                 "프로젝트 마감 설정" if not proj.due
+                 else "프로젝트 마감 변경 / 제거")
 
         # 진행바 (접혀 있어도 표시 — 진행률은 한눈에 보이게)
         bar_canvas = self._draw_progress_bar(inner, proj.percent)
@@ -1754,7 +1816,7 @@ class DashboardWidget:
         """
         proj_part = tuple(
             (p.folder.name, p.name, p.note, p.hidden, p.collapsed,
-             p.last_update, p.last_change,
+             p.due, p.last_update, p.last_change,
              tuple((it.text, it.done, it.due) for it in p.items))
             for p in projects
         )

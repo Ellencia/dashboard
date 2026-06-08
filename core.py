@@ -80,6 +80,7 @@ class Project:
     last_change: str = ""             # 가장 최근 변경 요약 한 줄
     hidden: bool = False              # 위젯에서 숨김 처리됐는지
     collapsed: bool = False           # 카드가 접힌 상태인지
+    due: str = ""                     # 프로젝트 자체의 마감일 (ISO YYYY-MM-DD)
 
     @property
     def total(self) -> int:
@@ -248,11 +249,20 @@ def _read_project(folder: Path) -> Project | None:
 
     text = status_path.read_text(encoding="utf-8")
 
-    # 첫 번째 "# 제목"을 표시 이름으로, 없으면 폴더 이름을 사용
+    # 첫 번째 "# 제목"을 표시 이름으로, 없으면 폴더 이름을 사용.
+    # 제목에 !YYYY-MM-DD 가 있으면 프로젝트 마감으로 분리.
     name = folder.name
+    project_due = ""
     for line in text.splitlines():
         if line.startswith("# "):
-            name = line[2:].strip()
+            title = line[2:].strip()
+            due_m = _DUE_RE.search(title)
+            if due_m:
+                y, mo, d = due_m.group(1).split("-")
+                project_due = f"{y}-{int(mo):02d}-{int(d):02d}"
+                title = re.sub(
+                    r"\s*!\d{4}-\d{1,2}-\d{1,2}", "", title).strip()
+            name = title or folder.name
             break
 
     note, items = _parse_status(status_path, name)
@@ -267,7 +277,8 @@ def _read_project(folder: Path) -> Project | None:
 
     return Project(name=name, folder=folder, status_path=status_path,
                    note=note, items=items, update_path=update_path,
-                   last_update=last_update, last_change=last_change)
+                   last_update=last_update, last_change=last_change,
+                   due=project_due)
 
 
 # 자동 탐색에서 건너뛸 폴더 이름 (코드/빌드 부산물 등). _drop은 JSON 드롭 폴더로 STATUS.md가 없음.
@@ -437,14 +448,39 @@ def _write_lines(path: Path, lines: list[str]) -> None:
 
 
 def set_project_name(status_path: Path, name: str) -> None:
-    """STATUS.md의 '# 제목' 줄을 새 이름으로 교체 (없으면 맨 위에 추가)."""
+    """STATUS.md의 '# 제목' 줄을 새 이름으로 교체 (없으면 맨 위에 추가).
+
+    제목에 기존 마감 토큰(!YYYY-MM-DD)이 있으면 보존해 끝에 다시 붙임.
+    """
     lines = status_path.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         if line.startswith("# "):
-            lines[i] = f"# {name}"
+            old_title = line[2:].strip()
+            due_m = _DUE_RE.search(old_title)
+            due_suffix = f" !{due_m.group(1)}" if due_m else ""
+            lines[i] = f"# {name}{due_suffix}"
             break
     else:
         lines.insert(0, f"# {name}")
+    _write_lines(status_path, lines)
+
+
+def set_project_due(status_path: Path, iso_date: str) -> None:
+    """STATUS.md '# 제목' 줄에 마감 토큰 설정/제거. iso_date=""면 제거.
+
+    이름은 유지, 끝의 !날짜만 갈아치움.
+    """
+    lines = status_path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            title = line[2:].strip()
+            title_clean = re.sub(
+                r"\s*!\d{4}-\d{1,2}-\d{1,2}", "", title).strip()
+            if iso_date:
+                lines[i] = f"# {title_clean} !{iso_date}"
+            else:
+                lines[i] = f"# {title_clean}"
+            break
     _write_lines(status_path, lines)
 
 
