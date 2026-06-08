@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 할 일 마감일 빠른 설정 — 마감 있는 행은 색 D-N 배지 클릭, 없는 행은 무딘 🕒 아이콘 클릭 → 다크 팝업으로 프리셋 선택 (오늘/내일/모레/이번 주 금/다음 주 월/+1주/+2주/+1개월/마감 제거). `core.parse_natural_due`로 ISO 변환 + `_DUE_STRIP_RE`로 기존 토큰 교체 + `rename_item`. 펄스 피드백도 함께
 - 할 일 추가 시 시각 피드백 — `_just_added` 마킹 후 refresh. 매칭되는 행을 그리면 자동 스크롤로 view 안으로 + 강조색→bg 페이드 펄스(10단계, 1.2초). row와 같은 bg 가진 자식만 함께 갱신(태그 칩·마감 배지는 보존). 위치는 여전히 맨 밑(드래그 순서·STATUS.md 가독성 유지), 피드백으로 발견성만 보강
 - 할 일 행 클릭 영역 분리 — 체크박스(☐/☑)는 완료 토글, 텍스트 클릭은 그 자리에서 Entry로 교체돼 인라인 편집. Enter/FocusOut으로 `core.rename_item` 호출, Esc/빈 값이면 원래 라벨 복구. 텍스트에 cursor="xterm"로 시각적 힌트. 토글이 너무 잦게 일어나던 UX 개선
 - snap 후 inner 잔여 스크롤 제거 — 사용자 지정 크기 모드(`height>0`)에선 `todos_max_height` 캡 무시하고 inner_canvas를 inner_frame 내용 전체에 맞춤. 자동 모드에선 기존대로 cap. 자연 snap 후 inner 안에 작은 스크롤이 남던 불편 해결

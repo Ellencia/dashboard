@@ -983,6 +983,59 @@ class DashboardWidget:
         entry.bind("<FocusOut>",
                    lambda e: entry.after(200, close_popup), add="+")
 
+    def _show_due_picker(self, proj, item, anchor: tk.Widget) -> None:
+        """할 일에 마감일을 빠르게 설정하는 다크 팝업.
+
+        프리셋(오늘/내일/모레/금/월/+1주/+2주/+1개월) + 마감 제거.
+        선택 시 `core.parse_natural_due`로 ISO 변환 → rename_item으로 텍스트 갱신.
+        """
+        from core import parse_natural_due
+        presets = [
+            ("오늘", "오늘"),
+            ("내일", "내일"),
+            ("모레", "모레"),
+            ("이번 주 금", "금"),
+            ("다음 주 월", "월"),
+            ("+ 1주", "+1w"),
+            ("+ 2주", "+2w"),
+            ("+ 1개월", "+1m"),
+        ]
+        m = _PopupMenu(self.root, self.theme)
+        for label, token in presets:
+            iso = parse_natural_due(token)
+            if iso is None:
+                continue
+            m.add(f"{label}    {iso}",
+                  lambda iso_=iso: self._set_item_due(proj, item, iso_))
+        if item.due:
+            m.add_separator()
+            m.add(f"마감 제거  ({item.due})",
+                  lambda: self._set_item_due(proj, item, ""))
+        # anchor 위젯 바로 아래에 띄움
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height()
+        m.popup(x, y)
+
+    def _set_item_due(self, proj, item, iso_date: str) -> None:
+        """item의 마감일을 iso_date로 설정 (빈 문자열이면 마감 제거).
+
+        text에서 기존 `!YYYY-MM-DD` 토큰을 떼고, iso_date가 있으면 끝에 추가.
+        rename_item으로 STATUS.md 갱신 + pulse 피드백.
+        """
+        from core import rename_item
+        stripped = _DUE_STRIP_RE.sub("", item.text)
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        new_text = f"{stripped} !{iso_date}".strip() if iso_date else stripped
+        if not new_text or new_text == item.text:
+            return
+        try:
+            rename_item(proj.status_path, item.text, new_text)
+        except OSError:
+            return
+        self._just_added = (proj.folder.name, new_text)
+        self._last_draw_fp = None
+        self.refresh()
+
     def _show_shortcuts_popup(self) -> None:
         """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
         m = _PopupMenu(self.root, self.theme)
@@ -1432,15 +1485,27 @@ class DashboardWidget:
             chip.pack(side="right", padx=(3, 0))
             chips.append(chip)
 
-        # 마감일 배지 (있을 때만, 태그 칩보다 왼쪽 = 안쪽)
+        # 마감일 영역 — 있으면 색 배지, 없으면 무딘 🕒 아이콘. 둘 다 클릭 시 마감 picker
         due_extra = 0
         badge_info = _due_badge(item.due)
         if badge_info:
-            label, color = badge_info
-            tk.Label(row, text=label, bg=color, fg="#1e1e2e",
-                     font=(FONT, 7, "bold"), padx=4).pack(
-                side="right", padx=(3, 0))
+            badge_text, badge_color = badge_info
+            due_widget: tk.Label = tk.Label(
+                row, text=badge_text, bg=badge_color, fg="#1e1e2e",
+                font=(FONT, 7, "bold"), padx=4, cursor="hand2")
+            due_widget.pack(side="right", padx=(3, 0))
             due_extra = 40
+            _Tooltip(due_widget, "마감일 변경 / 제거")
+        else:
+            due_widget = tk.Label(
+                row, text="🕒", bg=t["bg"], fg=t["subtext"],
+                font=(FONT, 8), cursor="hand2")
+            due_widget.pack(side="right", padx=(3, 2))
+            due_extra = 18
+            _Tooltip(due_widget, "마감일 설정")
+        due_widget.bind(
+            "<Button-1>",
+            lambda e, p=proj, it=item, b=due_widget: self._show_due_picker(p, it, b))
 
         # 표시용 텍스트 — #태그/마감일 부분 제거, 공백 정리. 빈 문자열이면 원본
         display = _TAG_STRIP_RE.sub("", item.text)
