@@ -25,7 +25,6 @@ from pathlib import Path
 from core import (
     BASE_DIR,
     CONFIG_PATH,
-    add_quick_todo,
     load_config,
     log_completion,
     process_drop_folder,
@@ -692,10 +691,11 @@ class DashboardWidget:
         btn.bind("<Button-1>", lambda e: self._new_project())
 
     def _draw_quick_input(self) -> None:
-        """빠른 입력 한 줄 + 포커스 시 형식 hint.
+        """프로젝트 빠른 생성 — 이름만 입력해 Enter로 즉시 생성.
 
-        형식: `[프로젝트] 텍스트 #태그 !날짜` (Enter 또는 + 클릭)
-        프로젝트 안 적으면 Inbox(받은 편지함)로. 빈 줄은 무시. Ctrl+N으로 포커스.
+        템플릿 적용이나 마감 설정이 필요하면 요약 줄의 '+ 새 프로젝트' 링크로
+        전체 다이얼로그를 엶. 할 일 추가는 각 묶음 끝의 입력칸을 사용.
+        Ctrl+N으로 포커스.
         """
         t = self.theme
         wrap = tk.Frame(self.body, bg=t["bg"])
@@ -705,16 +705,16 @@ class DashboardWidget:
         plus = tk.Label(row, text="+", bg=t["bg"], fg=t["accent"],
                         font=(FONT, 12, "bold"), cursor="hand2", padx=2)
         plus.pack(side="left")
-        _Tooltip(plus, "할 일 추가 (Enter). 형식: [프로젝트] 내용 #태그 !날짜")
+        _Tooltip(plus, "새 프로젝트 만들기 (이름 입력 후 Enter)")
         entry = tk.Entry(row, textvariable=self._quick_var, bg=t["card"],
                          fg=t["text"], insertbackground=t["text"],
                          relief="flat", font=(FONT, 9))
         entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self._quick_entry = entry
-        # 포커스 받으면 형식 hint 표시, 잃으면 숨김
+        # 포커스 받으면 안내 hint 표시, 잃으면 숨김
         hint = tk.Label(
             wrap,
-            text="[프로젝트] 내용 #태그 !날짜  ·  자연어: !오늘 !내일 !금 !+3 !+1w",
+            text="새 프로젝트 이름 — 입력 후 Enter (템플릿/마감은 우측 '+ 새 프로젝트' 링크)",
             bg=t["bg"], fg=t["subtext"], font=(FONT, 7), anchor="w")
 
         def show_hint(_e=None):
@@ -727,22 +727,27 @@ class DashboardWidget:
         entry.bind("<FocusOut>", hide_hint, add="+")
 
         def submit(_e=None) -> str | None:
-            line = self._quick_var.get().strip()
-            if not line:
+            from core import create_project, safe_folder_name
+            name = self._quick_var.get().strip()
+            if not name:
                 return None
-            result = add_quick_todo(self.cfg, line)
-            if result is not None:
-                from core import normalize_due_in_text
-                folder, content = result
-                self._just_added = (folder.name, normalize_due_in_text(content))
-                self._quick_var.set("")
-                self._last_draw_fp = None
-                self.refresh()
+            folder = safe_folder_name(name)
+            if not folder:
+                return None
+            root = Path(self.cfg["root"]).resolve()
+            if (root / folder).exists():
+                return "break"   # 같은 이름 존재 — 조용히 무시
+            try:
+                create_project(root, folder, name)
+            except OSError:
+                return "break"
+            self._quick_var.set("")
+            self._last_draw_fp = None
+            self.refresh()
             return "break"
 
         entry.bind("<Return>", submit)
         plus.bind("<Button-1>", submit)
-        self._attach_tag_completer(entry)
 
     def _draw_summary(self, projects: list) -> None:
         t = self.theme
