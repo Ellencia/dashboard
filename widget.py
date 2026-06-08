@@ -1443,20 +1443,87 @@ class DashboardWidget:
         # 완료 항목은 흐린 색 + 취소선 (tk font의 4번째 modifier)
         txt_font = (FONT, 9, "overstrike") if item.done else (FONT, 9)
         txt_fg = t["subtext"] if item.done else t["text"]
+        # cursor="xterm" — 클릭하면 인라인 편집된다는 시각적 힌트
         txt = tk.Label(row, text=display, bg=t["bg"], fg=txt_fg,
                        font=txt_font, anchor="w", justify="left",
-                       cursor="hand2",
+                       cursor="xterm",
                        wraplength=max(80, self.width - 80 - chip_room))
         txt.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
-        # 핸들과 칩을 뺀 나머지를 누르면 완료 처리. 칩 클릭은 그 태그로 필터링
-        for w in (row, box, txt):
-            w.bind("<Button-1>",
-                   lambda e, p=proj, it=item: self._on_todo_click(p, it))
+        # 클릭 영역 분리:
+        #   체크박스 = 완료 토글
+        #   텍스트   = 인라인 편집 (Entry로 교체 → Enter/FocusOut 저장, Esc 취소)
+        #   태그 칩  = 그 태그로 필터링
+        box.bind("<Button-1>",
+                 lambda e, p=proj, it=item: self._on_todo_click(p, it))
+        txt.bind("<Button-1>",
+                 lambda e, p=proj, it=item, t_lbl=txt, r=row:
+                 self._start_inline_edit(p, it, t_lbl, r))
         for chip, tag in zip(chips, reversed(item.tags)):
             chip.bind("<Button-1>",
                       lambda e, tg=tag: self._toggle_tag_filter(tg))
         return handle, row
+
+    def _start_inline_edit(self, proj, item, txt_label: tk.Label,
+                           row: tk.Frame) -> None:
+        """할 일 텍스트 클릭 — 그 자리에 Entry로 교체해 바로 편집.
+
+        Enter / FocusOut: rename_item으로 STATUS.md에 반영 후 refresh.
+        Esc / 빈 값: 원래 라벨 복구 (수정 안 함).
+        """
+        from core import rename_item
+        t = self.theme
+        # 옛 라벨 숨김 (위젯은 살려둠 — Esc로 복구 시 다시 pack)
+        txt_label.pack_forget()
+        var = tk.StringVar(value=item.text)
+        entry = tk.Entry(row, textvariable=var, bg=t["card"], fg=t["text"],
+                         insertbackground=t["text"], relief="flat",
+                         font=(FONT, 9))
+        # chips는 이미 side="right"로 packed 됨 → 새 entry는 가운데 슬롯을 차지
+        entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        entry.focus_set()
+        entry.icursor(tk.END)
+        entry.select_range(0, tk.END)
+
+        done = {"v": False}   # 중복 commit 방지 (FocusOut와 Return가 동시에 fire)
+
+        def restore_label():
+            try:
+                entry.destroy()
+            except tk.TclError:
+                pass
+            try:
+                txt_label.pack(side="left", fill="x", expand=True, padx=(4, 0))
+            except tk.TclError:
+                pass
+
+        def commit(_e=None):
+            if done["v"]:
+                return "break"
+            done["v"] = True
+            new = var.get().strip()
+            if not new or new == item.text:
+                restore_label()
+                return "break"
+            try:
+                rename_item(proj.status_path, item.text, new)
+            except OSError:
+                restore_label()
+                return "break"
+            self._last_draw_fp = None   # rename은 데이터 변화 → 전체 redraw
+            self.refresh()
+            return "break"
+
+        def cancel(_e=None):
+            if done["v"]:
+                return "break"
+            done["v"] = True
+            restore_label()
+            return "break"
+
+        entry.bind("<Return>", commit)
+        entry.bind("<FocusOut>", commit)
+        entry.bind("<Escape>", cancel)
 
     def _bind_tree(self, widget: tk.Widget, sequence: str, handler) -> None:
         """위젯과 그 안의 모든 하위 위젯에 같은 이벤트 핸들러를 연결."""
