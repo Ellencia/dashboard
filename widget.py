@@ -351,6 +351,9 @@ class DashboardWidget:
         self._icon_buttons: list[tk.Label] = []
         self._todo_canvas: tk.Canvas | None = None   # 할 일 영역 내부 스크롤
         self._snap_indicator: tk.Frame | None = None   # 리사이즈 시 snap 가이드선
+        # 방금 추가된 할 일 — refresh 직후 그 행에 펄스 + 자동 스크롤
+        # (folder_name, normalized_text) tuple, 한 번 소비되면 None
+        self._just_added: tuple[str, str] | None = None
         # 깜빡임 방지: 마지막으로 그린 내용의 지문 — 같으면 redraw 건너뜀
         self._last_draw_fp = None
         self._footer_label: tk.Label | None = None
@@ -729,6 +732,9 @@ class DashboardWidget:
                 return None
             result = add_quick_todo(self.cfg, line)
             if result is not None:
+                from core import normalize_due_in_text
+                folder, content = result
+                self._just_added = (folder.name, normalize_due_in_text(content))
                 self._quick_var.set("")
                 self._last_draw_fp = None
                 self.refresh()
@@ -1351,7 +1357,9 @@ class DashboardWidget:
             text = var.get().strip()
             if not text:
                 return
+            from core import normalize_due_in_text
             add_item(proj.status_path, text)
+            self._just_added = (proj.folder.name, normalize_due_in_text(text))
             var.set("")
             self._last_draw_fp = None
             self.refresh()
@@ -1462,7 +1470,91 @@ class DashboardWidget:
         for chip, tag in zip(chips, reversed(item.tags)):
             chip.bind("<Button-1>",
                       lambda e, tg=tag: self._toggle_tag_filter(tg))
+
+        # 방금 추가된 할 일이면 펄스 + 스크롤 (한 번만 소비)
+        if (self._just_added is not None
+                and self._just_added == (proj.folder.name, item.text)):
+            self._just_added = None
+            original_bg = t["bg"]
+            # layout이 정착한 뒤 실행 (after_idle → 첫 펄스 step)
+            self.root.after(50, lambda r=row: self._scroll_to_row(r))
+            self.root.after(80,
+                            lambda r=row, bg=original_bg: self._pulse_row(r, bg))
+
         return handle, row
+
+    def _pulse_row(self, row: tk.Frame, original_bg: str) -> None:
+        """방금 추가된 할 일 행의 bg를 강조색→원래색으로 ~1.2초간 fade.
+
+        라이트 메모리 작동 — row 와 같은 bg를 가진 자식(handle/box/txt)만
+        함께 갱신. 칩·배지는 자기 색이 있으므로 건드리지 않음. row가 destroy
+        됐어도(예: 새로운 refresh로) 조용히 무시.
+        """
+        if not row.winfo_exists():
+            return
+        targets: list[tk.Widget] = [row]
+        for child in row.winfo_children():
+            try:
+                if child.cget("bg") == original_bg:
+                    targets.append(child)
+            except tk.TclError:
+                pass
+
+        def hex_to_rgb(h: str) -> tuple[int, int, int]:
+            h = h.lstrip("#")
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+        accent = self.theme["accent"]
+        ar, ag, ab = hex_to_rgb(accent)
+        br, bg_, bb = hex_to_rgb(original_bg)
+        n_steps = 10
+        duration_ms = 1200
+
+        def set_step(step: int) -> None:
+            f = step / n_steps   # 0→accent, 1→original_bg
+            r = int(ar * (1 - f) + br * f)
+            g = int(ag * (1 - f) + bg_ * f)
+            b = int(ab * (1 - f) + bb * f)
+            color = f"#{r:02x}{g:02x}{b:02x}"
+            for w in targets:
+                try:
+                    if w.winfo_exists():
+                        w.configure(bg=color)
+                except tk.TclError:
+                    pass
+
+        for i in range(n_steps + 1):
+            delay = int(i * duration_ms / n_steps)
+            self.root.after(delay, lambda s=i: set_step(s))
+
+    def _scroll_to_row(self, row: tk.Frame) -> None:
+        """방금 추가된 할 일 행이 viewport 밖이면 inner_canvas를 스크롤해 보이게."""
+        if self._todo_canvas is None or not row.winfo_exists():
+            return
+        canvas = self._todo_canvas
+        try:
+            if not canvas.winfo_exists():
+                return
+            canvas.update_idletasks()
+            row_y = row.winfo_y()
+            row_h = row.winfo_height()
+            sr = canvas.cget("scrollregion") or ""
+            parts = sr.split()
+            if len(parts) != 4:
+                return
+            sr_h = float(parts[3])
+            if sr_h <= 0:
+                return
+            top_frac, bot_frac = canvas.yview()
+            view_top = top_frac * sr_h
+            view_bottom = bot_frac * sr_h
+            # 이미 view 안이면 스크롤 안 함
+            if view_top <= row_y and (row_y + row_h) <= view_bottom:
+                return
+            # row가 살짝 위에 보이도록 (top - 10px)
+            canvas.yview_moveto(max(0.0, (row_y - 10) / sr_h))
+        except tk.TclError:
+            pass
 
     def _start_inline_edit(self, proj, item, txt_label: tk.Label,
                            row: tk.Frame) -> None:
