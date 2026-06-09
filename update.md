@@ -5,6 +5,7 @@
 
 ## 2026-05-22
 
+- 이미 입력된 자연어 마감도 인식 — 파싱/표시 경로가 ISO만 보던 회귀. `core.strip_due_tokens`, `core.extract_first_due` 헬퍼 추가. `_parse_status`(할 일), `_read_project`(프로젝트 제목), `set_project_name`, `set_project_due`, widget의 `_set_item_due`·display strip 모두 자연어/ISO 양쪽 인식하도록 갱신. `!9월30일`이나 `!12/25`가 이미 STATUS.md에 적혀 있어도 D-N 배지 정상 표시되고 인라인 편집 시 정리됨. 의미 없는 토큰(`!abc`)은 보존
 - 자연어 마감 표기 확장 — `parse_natural_due`에 다음 형식 추가:
   - 한국어 월/일: `9월30일`, `9월 30일`, `12월25일` (연도 생략 → 올해, 지났으면 내년)
   - 한국어 연/월/일: `2026년9월30일`, `26년9월30일`

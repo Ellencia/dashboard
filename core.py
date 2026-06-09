@@ -177,12 +177,8 @@ def _parse_status(path: Path, project_name: str) -> tuple[str, list[TodoItem]]:
         m = _CHECK_RE.match(line)
         if m:
             text = m.group(2)
-            due_match = _DUE_RE.search(text)
-            due = ""
-            if due_match:
-                # 한 자리 월/일은 두 자리로 정규화 ("2026-6-5" → "2026-06-05")
-                y, mo, d = due_match.group(1).split("-")
-                due = f"{y}-{int(mo):02d}-{int(d):02d}"
+            # 자연어/ISO 모두 인식 — 한국어 월/일, 슬래시 등도 due로 추출
+            due, _ = extract_first_due(text)
             items.append(
                 TodoItem(
                     text=text,
@@ -250,18 +246,13 @@ def _read_project(folder: Path) -> Project | None:
     text = status_path.read_text(encoding="utf-8")
 
     # 첫 번째 "# 제목"을 표시 이름으로, 없으면 폴더 이름을 사용.
-    # 제목에 !YYYY-MM-DD 가 있으면 프로젝트 마감으로 분리.
+    # 제목에 자연어/ISO 마감 토큰이 있으면 프로젝트 마감으로 분리.
     name = folder.name
     project_due = ""
     for line in text.splitlines():
         if line.startswith("# "):
             title = line[2:].strip()
-            due_m = _DUE_RE.search(title)
-            if due_m:
-                y, mo, d = due_m.group(1).split("-")
-                project_due = f"{y}-{int(mo):02d}-{int(d):02d}"
-                title = re.sub(
-                    r"\s*!\d{4}-\d{1,2}-\d{1,2}", "", title).strip()
+            project_due, title = extract_first_due(title)
             name = title or folder.name
             break
 
@@ -450,14 +441,14 @@ def _write_lines(path: Path, lines: list[str]) -> None:
 def set_project_name(status_path: Path, name: str) -> None:
     """STATUS.md의 '# 제목' 줄을 새 이름으로 교체 (없으면 맨 위에 추가).
 
-    제목에 기존 마감 토큰(!YYYY-MM-DD)이 있으면 보존해 끝에 다시 붙임.
+    제목에 기존 마감 토큰(ISO 또는 자연어)이 있으면 ISO로 정규화해 보존.
     """
     lines = status_path.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         if line.startswith("# "):
             old_title = line[2:].strip()
-            due_m = _DUE_RE.search(old_title)
-            due_suffix = f" !{due_m.group(1)}" if due_m else ""
+            due, _ = extract_first_due(old_title)
+            due_suffix = f" !{due}" if due else ""
             lines[i] = f"# {name}{due_suffix}"
             break
     else:
@@ -468,14 +459,13 @@ def set_project_name(status_path: Path, name: str) -> None:
 def set_project_due(status_path: Path, iso_date: str) -> None:
     """STATUS.md '# 제목' 줄에 마감 토큰 설정/제거. iso_date=""면 제거.
 
-    이름은 유지, 끝의 !날짜만 갈아치움.
+    제목에 기존 ISO/자연어 마감이 있으면 떼고 새 ISO로 갈아끼움.
     """
     lines = status_path.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         if line.startswith("# "):
             title = line[2:].strip()
-            title_clean = re.sub(
-                r"\s*!\d{4}-\d{1,2}-\d{1,2}", "", title).strip()
+            _, title_clean = extract_first_due(title)
             if iso_date:
                 lines[i] = f"# {title_clean} !{iso_date}"
             else:
@@ -596,6 +586,33 @@ def normalize_due_in_text(text: str) -> str:
         iso = parse_natural_due(m.group(1))
         return f"!{iso}" if iso is not None else m.group(0)
     return _DUE_TOKEN_RE.sub(_replace, text)
+
+
+def strip_due_tokens(text: str) -> str:
+    """텍스트 안의 모든 !마감 토큰(ISO/자연어 모두) 제거 후 공백 정리.
+
+    `parse_natural_due`로 인식되는 토큰만 제거 — `!abc` 같은 의미없는 건 보존.
+    """
+    def _replace(m):
+        if parse_natural_due(m.group(1)) is not None:
+            return ""
+        return m.group(0)
+    result = _DUE_TOKEN_RE.sub(_replace, text)
+    return re.sub(r"\s+", " ", result).strip()
+
+
+def extract_first_due(text: str) -> tuple[str, str]:
+    """텍스트에서 첫 번째 유효한 !마감을 찾아 (ISO, 그 토큰만 제거된 텍스트) 반환.
+
+    인식 안 되는 토큰은 건너뛰고 다음 후보를 봄. 끝까지 없으면 ("", 원문).
+    """
+    for m in _DUE_TOKEN_RE.finditer(text):
+        iso = parse_natural_due(m.group(1))
+        if iso is not None:
+            stripped = text[:m.start()] + text[m.end():]
+            stripped = re.sub(r"\s+", " ", stripped).strip()
+            return iso, stripped
+    return "", text
 
 
 def add_item(status_path: Path, text: str) -> None:

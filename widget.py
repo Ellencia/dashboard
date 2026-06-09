@@ -26,6 +26,7 @@ from core import (
     BASE_DIR,
     CONFIG_PATH,
     load_config,
+    strip_due_tokens,
     log_completion,
     process_drop_folder,
     reorder_items,
@@ -47,7 +48,7 @@ TITLEBAR_H = 34          # 제목 표시줄 높이(px)
 # 할 일 텍스트에서 #태그 부분(앞 공백 포함)을 떼어 표시용 글자만 남기는 정규식
 _TAG_STRIP_RE = re.compile(r"\s*#\w+")
 # 마감일 (!YYYY-MM-DD)도 표시용 글자에서 제거
-_DUE_STRIP_RE = re.compile(r"\s*!\d{4}-\d{1,2}-\d{1,2}")
+# 자연어 마감 토큰까지 제거하려고 core.strip_due_tokens 사용 — 이 정규식은 더 이상 안 씀
 
 # 같은 태그는 항상 같은 색이 되도록 결정적으로 매핑하는 작은 팔레트
 _TAG_PALETTE = ["#7aa2f7", "#9ece6a", "#e0af68", "#f7768e",
@@ -1028,8 +1029,7 @@ class DashboardWidget:
         rename_item으로 STATUS.md 갱신 + pulse 피드백.
         """
         from core import rename_item
-        stripped = _DUE_STRIP_RE.sub("", item.text)
-        stripped = re.sub(r"\s+", " ", stripped).strip()
+        stripped = strip_due_tokens(item.text)
         new_text = f"{stripped} !{iso_date}".strip() if iso_date else stripped
         if not new_text or new_text == item.text:
             return
@@ -1574,10 +1574,10 @@ class DashboardWidget:
             "<Button-1>",
             lambda e, p=proj, it=item, b=due_widget: self._show_due_picker(p, it, b))
 
-        # 표시용 텍스트 — #태그/마감일 부분 제거, 공백 정리. 빈 문자열이면 원본
+        # 표시용 텍스트 — #태그/마감 부분 제거. 자연어 마감(9월30일, 12/25)도 인식해 제거
         display = _TAG_STRIP_RE.sub("", item.text)
-        display = _DUE_STRIP_RE.sub("", display)
-        display = re.sub(r"\s+", " ", display).strip() or item.text
+        display = strip_due_tokens(display)
+        display = display or item.text
         # 칩·배지가 차지할 가로폭 (태그 1개당 ~35px, 마감 배지 ~40px)
         chip_room = 35 * len(item.tags) + due_extra
         # 완료 항목은 흐린 색 + 취소선 (tk font의 4번째 modifier)
