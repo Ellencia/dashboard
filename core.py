@@ -510,23 +510,68 @@ def parse_natural_due(token: str) -> str | None:
       - "+N" / "-N" (N일 후/전) / "+Nw" (N주) / "+Nm" (N달, 30일 근사)
       - "월"~"일" (한글 요일 — 다음 도래일, 같은 요일은 다음 주)
       - ISO "YYYY-MM-DD" (이미 정규형이면 그대로 반환)
+      - 한국어 "9월30일", "9월 30일", "12월25일" (연도 생략 → 올해, 지났으면 내년)
+      - 한국어 "2026년9월30일", "26년9월30일" (2자리 연도는 20XX로)
+      - 슬래시/점 "9/30", "9.30", "9-30" (연도 생략 → 올해, 지났으면 내년)
+      - 슬래시/점 "2026/9/30", "26.9.30" (연도 포함)
     못 알아들으면 None.
     """
     from datetime import date, timedelta
     token = token.strip()
     today = date.today()
 
-    iso_m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", token)
-    if iso_m:
+    def _resolve_md(month: int, day: int):
+        """월·일만 주어졌을 때 — 올해, 지났으면 내년으로."""
         try:
-            return date(*(int(x) for x in iso_m.groups())).isoformat()
+            target = date(today.year, month, day)
+        except ValueError:
+            return None
+        if target < today:
+            try:
+                target = date(today.year + 1, month, day)
+            except ValueError:
+                return None
+        return target.isoformat()
+
+    def _resolve_ymd(year: int, month: int, day: int):
+        if year < 100:
+            year += 2000
+        try:
+            return date(year, month, day).isoformat()
         except ValueError:
             return None
 
+    # ISO YYYY-MM-DD (4자리 연도 우선 — 슬래시/하이픈 패턴이 가로채지 않게)
+    iso_m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", token)
+    if iso_m:
+        return _resolve_ymd(*(int(x) for x in iso_m.groups()))
+
+    # 한국어 키워드
     keywords = {"오늘": 0, "내일": 1, "모레": 2, "글피": 3, "어제": -1}
     if token in keywords:
         return (today + timedelta(days=keywords[token])).isoformat()
 
+    # 한국어 YYYY년 M월 D일 (또는 YY년)
+    ko_full = re.match(r"^(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?$", token)
+    if ko_full:
+        return _resolve_ymd(*(int(x) for x in ko_full.groups()))
+
+    # 한국어 M월 D일
+    ko_md = re.match(r"^(\d{1,2})월\s*(\d{1,2})일?$", token)
+    if ko_md:
+        return _resolve_md(int(ko_md.group(1)), int(ko_md.group(2)))
+
+    # 슬래시/점/하이픈 — 연도 포함 (YYYY/M/D 또는 YY/M/D)
+    sl_ymd = re.match(r"^(\d{2,4})[/.\-](\d{1,2})[/.\-](\d{1,2})$", token)
+    if sl_ymd:
+        return _resolve_ymd(*(int(x) for x in sl_ymd.groups()))
+
+    # 슬래시/점/하이픈 — 월/일만 (연도 생략)
+    sl_md = re.match(r"^(\d{1,2})[/.\-](\d{1,2})$", token)
+    if sl_md:
+        return _resolve_md(int(sl_md.group(1)), int(sl_md.group(2)))
+
+    # 상대 (+N, -N, +Nw, +Nd, +Nm)
     rel_m = re.match(r"^([+-])(\d+)([dwm]?)$", token)
     if rel_m:
         sign = 1 if rel_m.group(1) == "+" else -1
@@ -535,6 +580,7 @@ def parse_natural_due(token: str) -> str | None:
         days = n if unit == "d" else (n * 7 if unit == "w" else n * 30)
         return (today + timedelta(days=sign * days)).isoformat()
 
+    # 한글 요일
     if token in _KOREAN_WEEKDAYS:
         target = _KOREAN_WEEKDAYS.index(token)
         cur = today.weekday()
