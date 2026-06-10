@@ -105,8 +105,13 @@ class Project:
 
 # config.json이 없거나 키가 빠졌을 때 사용하는 기본값
 DEFAULT_CONFIG = {
-    # 프로젝트들을 찾을 최상위 폴더 (기본: 대시보드 폴더의 부모)
+    # 프로젝트들을 찾을 최상위 폴더 (기본: 대시보드 폴더의 부모).
+    # 보통 코딩 워크스페이스(여러 도구가 공유) — Claude Code 등으로 만든 프로젝트가 여기.
     "root": str(BASE_DIR.parent),
+    # 위젯에서 '수동으로' 만든 프로젝트(업무 플래너용)가 저장될 폴더.
+    # 비어 있으면 root와 같이 씀. 코딩 프로젝트와 섞이지 않게 분리 가능.
+    # 이 폴더의 STATUS.md도 root와 함께 자동 발견됨.
+    "manual_project_root": "",
     # 명시적으로 추적할 프로젝트 경로 목록 (비우면 auto_discover만 사용)
     "projects": [],
     # True면 root 아래를 재귀적으로 훑어 STATUS.md가 있는 폴더를 자동으로 찾음
@@ -316,8 +321,30 @@ def _discover(root: Path, max_depth: int, exclude: set[str]) -> list[Path]:
     return found
 
 
+def manual_project_parent(cfg: dict) -> Path:
+    """수동으로 만든 프로젝트가 저장될 부모 폴더.
+
+    manual_project_root가 설정되어 있고 접근 가능하면 그걸,
+    아니면 root를 반환. 폴더가 없으면 생성 시도.
+    """
+    manual = (cfg.get("manual_project_root") or "").strip()
+    root = Path(cfg["root"]).resolve()
+    if not manual:
+        return root
+    p = Path(manual).resolve()
+    if not p.exists():
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return root
+    return p
+
+
 def scan_projects(cfg: dict) -> list[Project]:
-    """설정에 따라 프로젝트들을 찾아 Project 목록으로 반환."""
+    """설정에 따라 프로젝트들을 찾아 Project 목록으로 반환.
+
+    root 와 manual_project_root (다르면) 둘 다 자동 탐색.
+    """
     root = Path(cfg["root"]).resolve()
     folders: list[Path] = []
 
@@ -328,14 +355,23 @@ def scan_projects(cfg: dict) -> list[Project]:
             p = root / p
         folders.append(p.resolve())
 
-    # 2) auto_discover: root 아래를 재귀적으로 훑어 STATUS.md 폴더 자동 추가
-    if cfg.get("auto_discover", True) and root.exists():
+    # 2) auto_discover: root + manual_project_root 둘 다 훑어 STATUS.md 폴더 자동 추가
+    if cfg.get("auto_discover", True):
         max_depth = int(cfg.get("scan_depth", 4))
         exclude = set(cfg.get("exclude", []))
-        for child in _discover(root, max_depth, exclude):
-            rp = child.resolve()
-            if rp not in folders:
-                folders.append(rp)
+        scan_roots: list[Path] = []
+        if root.exists():
+            scan_roots.append(root)
+        manual = (cfg.get("manual_project_root") or "").strip()
+        if manual:
+            manual_path = Path(manual).resolve()
+            if manual_path.exists() and manual_path != root:
+                scan_roots.append(manual_path)
+        for r in scan_roots:
+            for child in _discover(r, max_depth, exclude):
+                rp = child.resolve()
+                if rp not in folders:
+                    folders.append(rp)
 
     hidden_names = set(cfg.get("hidden", []))
     collapsed_names = set(cfg.get("collapsed", []))

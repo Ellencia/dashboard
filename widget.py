@@ -26,6 +26,7 @@ from core import (
     BASE_DIR,
     CONFIG_PATH,
     load_config,
+    manual_project_parent,
     strip_due_tokens,
     log_completion,
     process_drop_folder,
@@ -735,11 +736,12 @@ class DashboardWidget:
             folder = safe_folder_name(name)
             if not folder:
                 return None
-            root = Path(self.cfg["root"]).resolve()
-            if (root / folder).exists():
+            # 수동 생성 — manual_project_root 설정 우선, 없으면 root
+            parent = manual_project_parent(self.cfg)
+            if (parent / folder).exists():
                 return "break"   # 같은 이름 존재 — 조용히 무시
             try:
-                create_project(root, folder, name)
+                create_project(parent, folder, name)
             except OSError:
                 return "break"
             self._quick_var.set("")
@@ -2179,8 +2181,8 @@ class DashboardWidget:
         self.menu.popup(event.x_root, event.y_root)
 
     def _new_project(self) -> None:
-        """제목줄 메뉴 — 새 프로젝트 만들기 창을 엶."""
-        editor.open_new_project(self.root, Path(self.cfg["root"]),
+        """제목줄 메뉴 — 새 프로젝트 만들기 창을 엶 (manual_project_root 우선)."""
+        editor.open_new_project(self.root, manual_project_parent(self.cfg),
                                 self.theme, self.refresh)
 
     def _toggle_pin(self) -> None:
@@ -2232,6 +2234,8 @@ class DashboardWidget:
         v_refresh = tk.IntVar(value=int(self.cfg.get("refresh_seconds", 30)))
         v_hotkey = tk.StringVar(value=self.wcfg.get("collapse_hotkey", ""))
         v_hide_hotkey = tk.StringVar(value=self.wcfg.get("hide_hotkey", ""))
+        v_manual_root = tk.StringVar(
+            value=str(self.cfg.get("manual_project_root", "")))
 
         pad = tk.Frame(win, bg=t["bg"])
         pad.pack(fill="both", expand=True, padx=14, pady=12)
@@ -2385,6 +2389,34 @@ class DashboardWidget:
                    width=6, bg=t["card"], fg=t["text"],
                    buttonbackground=t["card"], relief="flat").pack(side="left")
 
+        # 수동 생성 프로젝트 폴더 — 비우면 root와 같이 씀
+        r = add_row("수동 생성 폴더")
+        manual_entry = tk.Entry(
+            r, textvariable=v_manual_root, width=24, bg=t["card"],
+            fg=t["text"], insertbackground=t["text"], relief="flat",
+            font=(FONT, 9))
+        manual_entry.pack(side="left", fill="x", expand=True)
+
+        def pick_manual_root():
+            from tkinter import filedialog
+            current = v_manual_root.get().strip() or self.cfg.get("root", "")
+            chosen = filedialog.askdirectory(
+                title="수동 생성 프로젝트가 저장될 폴더",
+                initialdir=current, parent=win)
+            if chosen:
+                v_manual_root.set(chosen)
+
+        tk.Button(r, text="찾기", command=pick_manual_root, bg=t["card"],
+                  fg=t["text"], relief="flat", padx=8, cursor="hand2",
+                  font=(FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Button(r, text="비우기", command=lambda: v_manual_root.set(""),
+                  bg=t["card"], fg=t["subtext"], relief="flat", padx=8,
+                  cursor="hand2", font=(FONT, 9)).pack(side="left", padx=(4, 0))
+        tk.Label(pad,
+                 text="위젯에서 + 로 만든 프로젝트가 이 폴더로 들어감. 비어 있으면 root와 동일",
+                 bg=t["bg"], fg=t["subtext"], font=(FONT, 8)).pack(
+            anchor="w", pady=(2, 0))
+
         # 전역 단축키 — 접기/펴기와 닫기/열기를 따로 지정
         r = add_row("접기/펴기 단축키")
         tk.Entry(r, textvariable=v_hotkey, width=20, bg=t["card"],
@@ -2411,6 +2443,8 @@ class DashboardWidget:
                 return  # 숫자칸에 잘못된 값이 있으면 저장하지 않음
             disk = load_config()
             disk["refresh_seconds"] = refresh
+            disk["manual_project_root"] = v_manual_root.get().strip()
+            self.cfg["manual_project_root"] = disk["manual_project_root"]
             w = disk["widget"]
             w["x"] = self.root.winfo_x()       # 현재 창 위치 보존
             w["y"] = self.root.winfo_y()
