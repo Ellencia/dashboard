@@ -25,8 +25,10 @@ from pathlib import Path
 from core import (
     BASE_DIR,
     CONFIG_PATH,
+    discover_direct_projects,
     load_config,
     manual_project_parent,
+    move_projects,
     strip_due_tokens,
     log_completion,
     process_drop_folder,
@@ -2442,9 +2444,43 @@ class DashboardWidget:
             except (tk.TclError, ValueError):
                 return  # 숫자칸에 잘못된 값이 있으면 저장하지 않음
             disk = load_config()
+            new_manual = v_manual_root.get().strip()
+            old_manual = (self.cfg.get("manual_project_root") or "").strip()
+            # manual_project_root가 바뀌었고 옛 폴더에 수동 생성 프로젝트가 있으면
+            # 새 폴더로 옮길지 사용자에게 물음 (옛 폴더는 자동 발견 대상에서 빠지므로
+            # 그대로 두면 위젯에서 안 보이게 됨)
+            if old_manual and old_manual != new_manual:
+                from tkinter import messagebox
+                old_path = Path(old_manual).resolve()
+                movable = discover_direct_projects(old_path)
+                if movable:
+                    if new_manual:
+                        dest_path = Path(new_manual).resolve()
+                    else:
+                        dest_path = Path(self.cfg["root"]).resolve()
+                    names = ", ".join(p.name for p in movable[:5])
+                    if len(movable) > 5:
+                        names += f", … 외 {len(movable) - 5}개"
+                    answer = messagebox.askyesno(
+                        "수동 생성 프로젝트 이동",
+                        f"이전 폴더에 {len(movable)}개 프로젝트가 있음:\n"
+                        f"  {names}\n\n"
+                        f"  이전: {old_path}\n"
+                        f"  새 위치: {dest_path}\n\n"
+                        f"새 폴더로 옮길까요?\n"
+                        f"(아니오 → 그대로 둠. 새 manual 폴더 안 보이게 됨)",
+                        parent=win)
+                    if answer:
+                        ok, errors = move_projects(movable, dest_path)
+                        if errors:
+                            messagebox.showwarning(
+                                "이동 결과",
+                                f"성공 {ok}개 / 문제 {len(errors)}개:\n\n"
+                                + "\n".join(errors),
+                                parent=win)
             disk["refresh_seconds"] = refresh
-            disk["manual_project_root"] = v_manual_root.get().strip()
-            self.cfg["manual_project_root"] = disk["manual_project_root"]
+            disk["manual_project_root"] = new_manual
+            self.cfg["manual_project_root"] = new_manual
             w = disk["widget"]
             w["x"] = self.root.winfo_x()       # 현재 창 위치 보존
             w["y"] = self.root.winfo_y()

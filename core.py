@@ -321,6 +321,48 @@ def _discover(root: Path, max_depth: int, exclude: set[str]) -> list[Path]:
     return found
 
 
+def discover_direct_projects(root: Path) -> list[Path]:
+    """root 의 '바로 아래' 하위 폴더 중 STATUS.md를 가진 것들 (수동 생성 후보).
+
+    재귀 안 함 — manual_project_parent 가 항상 직속 자식으로 만들기 때문.
+    """
+    if not root.exists():
+        return []
+    out: list[Path] = []
+    try:
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and (child / STATUS_FILENAME).exists():
+                out.append(child)
+    except OSError:
+        pass
+    return out
+
+
+def move_projects(folders: list[Path], dest_root: Path) -> tuple[int, list[str]]:
+    """folders 를 dest_root 로 이동(shutil.move). (성공 개수, 실패 메시지) 반환.
+
+    같은 이름이 dest 에 이미 있으면 건너뛰고 메시지 추가. dest_root 가 없으면 생성.
+    """
+    import shutil
+    try:
+        dest_root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return 0, [f"대상 폴더 생성 실패: {e}"]
+    success = 0
+    errors: list[str] = []
+    for src in folders:
+        dst = dest_root / src.name
+        if dst.exists():
+            errors.append(f"{src.name}: 같은 이름이 이미 있음 — 건너뜀")
+            continue
+        try:
+            shutil.move(str(src), str(dst))
+            success += 1
+        except (OSError, shutil.Error) as e:
+            errors.append(f"{src.name}: {e}")
+    return success, errors
+
+
 def manual_project_parent(cfg: dict) -> Path:
     """수동으로 만든 프로젝트가 저장될 부모 폴더.
 
