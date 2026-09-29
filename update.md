@@ -3,8 +3,50 @@
 프로젝트 대시보드 위젯의 개발 변경 이력. 최신 날짜를 맨 위에 둠.
 각 날짜 블록의 첫 줄이 위젯 카드의 '최근 변경'으로 표시됨.
 
+## 2026-09-29
+- 편집창 할 일 옮기기(↗) 메뉴에 `→ work-inbox` 추가: 미완료 항목을 work-inbox DB로 한 건씩 넘기고 STATUS.md 에서 뺌 (core.send_to_work_inbox)
+
+## 2026-06-29
+
+- 일괄 입력 다이얼로그 (`qt/batch_add.py`) — 타이틀바 `⧉` 버튼. 모드(할 일 / 발주 행) + 텍스트 + 프로젝트 체크리스트(전체 선택/해제). Enter = 추가하고 다이얼로그는 열린 채 유지(연속 입력), Esc = 닫기. 할 일은 `core.add_item`, 발주 행은 각 프로젝트 orders.json 에 (그 프로젝트 워크플로 단계 수 기준 미완료) 추가. 마감은 자연어 허용
+- run.bat 수정 — 시스템 pythonw 가 아니라 PySide6 설치된 PPS venv 절대경로 사용 (더블클릭 실행 안 되던 문제)
+- eventFilter QWindow crash 수정 — application-level eventFilter 에 QWindow(top-level) 이벤트가 오면 `isAncestorOf` 가 TypeError → traceback 폭주로 앱 종료되던 것. non-Widget 이벤트는 early-return 으로 무시 (판정 자체를 안 함 — inside=False 로 오판해 편집이 꺼지던 회귀도 함께 해소)
+- 발주 트래커: Enter 로 다이얼로그 닫히던 것 keyPressEvent 로 차단, 카드에 트래커 행 표시(진행 마커 ●●○ + 다음 단계 + 체크 클릭=advance), 행 더블클릭=트래커 열기, orders.json mtime 을 fingerprint 에 포함
+- 발주 트래커 v1 (`qt/orders.py`) — 프로젝트별 orders.json, cfg.workflows(발주/월마감/구매카드/개인경비), 표(이름/마감/단계 체크/메모/삭제), 카드 우클릭 '발주 트래커...'
+- 프로젝트 편집창 Esc 로 닫기 (QShortcut — 입력칸 포커스 중에도)
+- 카드 head 전체 클릭 = 접기/펴기, 카드별 태그 통계 칩(진행률 바 아래), 카드 안 todo 더블클릭 인라인 편집 + 다른 곳 클릭 시 자동 저장(eventFilter)
+- 통합 '전체 할 일' 영역/QSplitter 제거 — 카드마다 자체 todo 리스트로 단순화. 전역 헤더(마감순/완료보기/태그 통계·필터)는 본문 상단에 유지
+- 카드 default 컴팩트 — cfg.expanded 에 명시된 카드만 펼침(의미 반전). 새 프로젝트는 자동 펼침+인박스 다음 위치(`core.register_new_project`)
+- 빠른 입력 통일 — 단일 입력칸 + [✎ 할일 | ⊕ 프로젝트] 모드 토글 (Ctrl+T/Ctrl+N). 할일 모드 대상 칩 선택은 cfg.default_quick_project 에 영구 저장
+- config.json BOM 오염 복구 — PowerShell `Set-Content -Encoding UTF8` 이 BOM 추가 → json.load 실패로 앱 시작 불가. BOM 제거 + 이후 cfg 조작은 파이썬으로
+
+## 2026-06-11
+
+- **Qt(PySide6) 마이그레이션** — tk 의 "윈도우 98 시절 느낌" 리사이즈/렌더링 해소가 목적. 새 `qt/` 패키지로 모든 핵심 UI 재구성. `core.py` 는 그대로 재사용. `QSizeGrip` 의 OS 레벨 리사이즈 + `QPropertyAnimation` 펄스 + 하드웨어 가속 렌더로 부드러움 본질 개선. `main.py` 가 `cfg.ui` 분기 (기본 `"qt"`, `"tk"` 면 legacy 폴백)
+- `qt/` 패키지 구성 — `theme`(Tokyo-Night + QSS 빌더), `titlebar`(자체 타이틀 ⊕/⚙/✕), `card`(진행률 카드), `quick_input`(프로젝트/할 일), `search_bar`, `editor`(편집창), `todo_edit_row`(편집창 행), `settings`(설정 다이얼로그), `tag_colors`(색 매핑), `new_project`(템플릿 선택), `tray`(QSystemTrayIcon 도넛 아이콘), `hotkeys`(GlobalHotkey + Signal), `window`(메인), `main`(진입점)
+- 카드 = 진행률·메모·최근 변경만 — todo 는 통합 '전체 할 일' 영역 한 곳으로. 카드 안 todo 와 통합 영역의 중복 해소. 카드 접으면 통합에서도 그 그룹 숨김
+- 통합 '전체 할 일' 영역 — 프로젝트별 그룹핑, `▼/▶` 토글, **마감순**·**완료보기** 토글 라벨(켜지면 강조), 태그 통계 칩 한 줄(빈도순), 태그 칩 클릭으로 필터, 활성 필터 칩은 흰 두꺼운 테두리, `필터: #태그 ✕ 해제` 배너
+- 할 일 빠른 입력 (Ctrl+T) — 푸터 위 영구 위치, `[프로젝트] 할 일 #태그 !마감` 형식, 없으면 인박스로. `core.add_quick_todo` 재사용
+- 드래그 reorder — 카드 좌측 `⋮⋮` 핸들 + `QDrag`/`QMimeData`, `application/x-project-folder` mime, drop indicator 가로선. 편집창 안 할 일 행도 동일 패턴 (`application/x-todo-text`)
+- 펄스 + 자동 스크롤 — 새 할 일/프로젝트 추가 시 `QScrollArea.ensureWidgetVisible` + accent → card 색 fade 펄스(10단계, 1.2초). `pulse_widget(widget, accent, original)` 헬퍼
+- 트레이 아이콘 — `QSystemTrayIcon` + `QPainter` 로 도넛 진행률 + 가운데 % 그림. 좌클릭 토글, 우클릭 메뉴(보이기/숨기기/설정/종료), 30초 주기 진행률 갱신. `setQuitOnLastWindowClosed(False)` 로 위젯 ✕ 닫아도 트레이만 남음
+- 글로벌 단축키 — `hotkey.GlobalHotkey`(Win32 RegisterHotKey, 별도 스레드) 그대로 재사용, PySide6 `Signal` 로 main thread 에 안전 전달. `collapse_hotkey` = 본문 접기/펴기(타이틀줄만), `hide_hotkey` = 위젯 hide/show. 앱 종료 시 unregister
+- 설정 다이얼로그 — 폭/높이/투명도(슬라이더)/topmost/새로고침 주기, **수동 생성 폴더** 선택 + 이동 체크리스트(이전 manual 출신은 기본 체크, root 출신은 기본 해제), **태그 색** 편집 다이얼로그(태그→hex + `QColorDialog` swatch), 전역 단축키 입력칸
+- 새 프로젝트 다이얼로그 — TitleBar `⊕` 버튼, 이름 + `core.list_templates()` dropdown
+- 푸터 + `_drop` watcher — 본문 하단에 "최근 변경 한 줄 · 업데이트 HH:MM:SS" (1초 in-place 갱신, 본문 redraw 와 분리). `_drop/*.json` 5초마다 `process_drop_folder` 호출
+- 숨김 섹션 펼치기/되돌리기 — 하단 `▶ 숨김 N개` 헤더 클릭 펼침, 각 행에 "다시 보이기" 링크 + 호버 강조
+- 박스 색 cascade 수정 — `app_qss` 의 글로벌 `QWidget { background: bg }` 가 카드 안 자식 QWidget 까지 적용돼 어두운 박스로 보이던 문제. `card_qss` 에 `QFrame#card QLabel { background: transparent }` cascade 추가. 명시적 background 가 있는 위젯(마감 배지 등)은 inline styleSheet 가 우선
+- 단일 실행 — `singleton.acquire()` 를 Qt 진입점에서도 호출. tk 와 같은 포트 50573 공유
+- `.md` 열기 robust 화 — VS Code(`code.cmd`) 우선, 핸들러 없으면 `notepad`, 폴더는 `explorer`. `os.startfile` 만으로 안 되던 `.md` 가 안정적으로 열림
+- 위치/크기 자동 저장 — 창 이동/리사이즈 500ms debounce 후 `widget.x/y/width/height` cfg 저장, 닫을 때 즉시. `_persist_geometry`
+- 프로젝트 마감 표시 수정 — `_read_project` 가 이미 마감 토큰을 `project.due` 로 분리 저장하는데 카드/편집창이 `extract_first_due(project.name)` 호출 → 빈 값 → 표시 안 되던 회귀. `project.due` / `project.name` 직접 사용으로 수정
+
 ## 2026-05-22
 
+- 리사이즈 그립 반응성 개선 — 우하단 그립 드래그 시 "내용이 한 박자 뒤에 따라옴" 느낌 해소. (1) `canvas.itemconfigure(self._body_id, width=new_w)` 를 매 모션에 호출해 본문(embedded window) 폭이 윈도우와 동시에 늘어남, (2) snap indicator 표시 상태/폭을 `_snap_visible`·`_snap_last_w` 로 캐싱해 실제로 바뀔 때만 `place/lift` 호출(둘 다 의외로 무거움), (3) 모션 끝에 `root.update_idletasks()` 추가 — 윈도우즈에서 `wm geometry` 가 다음 idle cycle 까지 화면 반영을 미루는 lag 해소. 무거운 `_fit_todo_canvas_to_available` 등은 release 시점에만 유지
+- 프로젝트 이름 변경 시 폴더도 같이 rename — 편집창에서 이름 바꾸면 `core.rename_project_folder` 가 `shutil.move` 로 폴더 이름을 새 이름의 `safe_folder_name` 결과로 변경 + STATUS.md '# 제목' 줄도 동기 갱신. config.json 의 `hidden`/`collapsed`/`project_order` 에 들어 있던 옛 폴더 이름도 새 이름으로 치환 (메모리 cfg in-place + 디스크 저장). 인박스(`_inbox`)는 변경 불가, 같은 이름 폴더가 이미 있으면 `FileExistsError` 로 거부하고 입력칸 원복. `_ProjectEditor` 의 `status_path`/`update_path`/`folder_name` 도 새 위치로 갱신
+- 이동 다이얼로그 후보 source 통합 — 이전 manual 폴더에 옮긴 프로젝트가 없으면(빈 폴더면) 다이얼로그가 안 뜨던 문제 수정. 이제 **이전 manual + root 양쪽** 의 직속 STATUS.md 폴더를 모두 후보로 노출. 이전 manual 출신은 기본 체크(다 수동 생성), root 출신은 기본 해제(코딩 섞여 있음). `_ask_projects_to_move` 시그니처를 `(folder, default_checked)` 튜플 리스트로 변경
+- 수동 생성 폴더 이동 다이얼로그 강화 — 처음 설정(이전이 비어 있던 상태)에서도 이제 후보 프로젝트가 있으면 묻도록. messagebox(yes/no) 대신 **다크 체크리스트 Toplevel** 로 어떤 폴더만 옮길지 선택 가능. 이전 manual에서 이동 시 전부 미리 체크(default_all=True), 처음 설정(root → manual) 시 전부 해제(코딩 섞여 있어 사용자가 명시 선택). 스크롤·전체 선택/해제 버튼·다크 제목 표시줄
 - 수동 생성 폴더 변경 시 기존 프로젝트 이동 묻기 — settings save 시 이전 `manual_project_root` 가 있고 다른 값으로 바뀌면, 이전 폴더 직속 STATUS.md 프로젝트들을 발견해 `tkinter.messagebox.askyesno`로 새 폴더로 옮길지 확인. 옮길 경우 `shutil.move` (같은 이름 충돌 시 건너뛰고 메시지). `core.discover_direct_projects(root)`, `core.move_projects(folders, dest)` 헬퍼 추가
 - 수동 생성 프로젝트 폴더 분리 — `manual_project_root` config 추가. 위젯에서 직접 만드는 프로젝트(상단 빠른 입력·`+ 새 프로젝트` 다이얼로그)가 이 폴더로 들어감. 비우면 root와 동일. `scan_projects`가 root와 manual 둘 다 자동 발견. `core.manual_project_parent(cfg)` helper. 설정창에 '수동 생성 폴더' 행 + 찾기/비우기 버튼(tkinter.filedialog). 코딩 워크스페이스와 플래너용 업무 프로젝트를 폴더 단위로 분리 가능
 - 이미 입력된 자연어 마감도 인식 — 파싱/표시 경로가 ISO만 보던 회귀. `core.strip_due_tokens`, `core.extract_first_due` 헬퍼 추가. `_parse_status`(할 일), `_read_project`(프로젝트 제목), `set_project_name`, `set_project_due`, widget의 `_set_item_due`·display strip 모두 자연어/ISO 양쪽 인식하도록 갱신. `!9월30일`이나 `!12/25`가 이미 STATUS.md에 적혀 있어도 D-N 배지 정상 표시되고 인라인 편집 시 정리됨. 의미 없는 토큰(`!abc`)은 보존

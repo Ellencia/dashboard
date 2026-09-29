@@ -354,6 +354,8 @@ class DashboardWidget:
         self._icon_buttons: list[tk.Label] = []
         self._todo_canvas: tk.Canvas | None = None   # 할 일 영역 내부 스크롤
         self._snap_indicator: tk.Frame | None = None   # 리사이즈 시 snap 가이드선
+        self._snap_visible: bool = False                # snap indicator 현재 표시 중인가
+        self._snap_last_w: int = 0                      # snap indicator 마지막 폭 (변할 때만 place)
         # 방금 추가된 할 일 — refresh 직후 그 행에 펄스 + 자동 스크롤
         # (folder_name, normalized_text) tuple, 한 번 소비되면 None
         self._just_added: tuple[str, str] | None = None
@@ -540,23 +542,33 @@ class DashboardWidget:
         self._resize_natural_h = (self.body.winfo_reqheight() + TITLEBAR_H)
 
     def _on_resize(self, event) -> None:
-        """드래그 중에는 창 크기(root.geometry)만 갱신 — 매끄럽게.
+        """드래그 중 — 창 크기 + 본문 폭(embedded window)을 매 모션마다 갱신.
 
-        본문 너비, 할 일 영역 fit 등의 무거운 레이아웃 캐스케이드는 release
-        시점에만 한 번. 안 그러면 매 모션마다 body.winfo_reqheight + 자식
-        layout 재계산이 30~60Hz로 발생해 저프레임처럼 느껴짐.
+        본문 폭(`canvas.itemconfigure(width=...)`)을 같이 갱신해야 윈도우와
+        내용물이 같이 늘어남. 안 하면 윈도우만 늘고 본문은 release 까지 옛 폭
+        → "한 박자 뒤에 따라옴" 느낌. 자식 reflow 비용보다 시각 동기화가 더 중요.
+        할 일 영역의 무거운 fit(`_fit_todo_canvas_to_available`)은 release 에서만.
 
-        자연 크기보다 더 끌면 그 지점에 강조색 가이드선 → "여기서 자동 줄어듦" 안내.
+        자연 크기보다 더 끌면 snap 위치에 강조색 가이드선 → "여기서 자동 줄어듦" 안내.
         """
         new_w = max(240, self._resize_w0 + (event.x_root - self._resize_x0))
         new_h = max(TITLEBAR_H + 60,
                     self._resize_h0 + (event.y_root - self._resize_y0))
         self.root.geometry(f"{new_w}x{new_h}")
-        # 자연 크기 넘기면 snap 위치에 가이드선 표시
-        if new_h > self._resize_natural_h + 4:
-            self._show_snap_indicator(self._resize_natural_h, new_w)
-        else:
+        # 본문(embedded window) 폭도 같이 — 즉시 늘어나 보이게
+        self.canvas.itemconfigure(self._body_id, width=new_w)
+        # snap 가이드 — 표시 상태/폭이 실제로 바뀔 때만 place (place/lift는 무거움)
+        show_snap = new_h > self._resize_natural_h + 4
+        if show_snap:
+            if not self._snap_visible or self._snap_last_w != new_w:
+                self._show_snap_indicator(self._resize_natural_h, new_w)
+                self._snap_visible = True
+                self._snap_last_w = new_w
+        elif self._snap_visible:
             self._hide_snap_indicator()
+            self._snap_visible = False
+        # 즉시 화면 반영 — 윈도우즈에서 wm geometry 가 다음 idle cycle 까지 lag 됨
+        self.root.update_idletasks()
 
     def _show_snap_indicator(self, snap_y: int, width: int) -> None:
         """자연 크기 위치에 강조색 가로선 + 작은 라벨 — 거기까지 줄어든다는 표시."""
@@ -589,6 +601,8 @@ class DashboardWidget:
             except tk.TclError:
                 pass
             self._snap_indicator = None
+        self._snap_visible = False
+        self._snap_last_w = 0
         self.width = self.root.winfo_width()
         self.canvas.itemconfigure(self._body_id, width=self.width)
         self.wcfg["width"] = self.width
@@ -1086,6 +1100,110 @@ class DashboardWidget:
             return
         self._last_draw_fp = None
         self.refresh()
+
+    def _ask_projects_to_move(self, parent_win: tk.Toplevel,
+                              candidates: list, dest_path) -> list:
+        """체크리스트 다이얼로그 — 어떤 폴더를 dest_path로 옮길지 사용자가 선택.
+
+        candidates: [(folder_Path, default_checked: bool), ...]
+        반환: 사용자가 체크해 '이동' 누른 폴더 리스트. 취소 또는 빈 선택이면 [].
+        이전 manual 직속은 default=True(다 수동), root 직속은 default=False(섞여 있음).
+        """
+        t = self.theme
+        win = tk.Toplevel(parent_win)
+        win.title("프로젝트 이동")
+        win.configure(bg=t["bg"])
+        win.resizable(False, True)
+        win.attributes("-topmost", True)
+        win.geometry(
+            f"460x440+{parent_win.winfo_x() + 30}+{parent_win.winfo_y() + 30}")
+        editor.apply_dark_titlebar(win)
+
+        pad = tk.Frame(win, bg=t["bg"])
+        pad.pack(padx=14, pady=12, fill="both", expand=True)
+
+        tk.Label(pad, text="어느 프로젝트들을 새 폴더로 옮길까요?",
+                 bg=t["bg"], fg=t["text"], font=(FONT, 11, "bold"),
+                 anchor="w").pack(fill="x")
+        tk.Label(pad, text=f"새 위치: {dest_path}",
+                 bg=t["bg"], fg=t["subtext"], font=(FONT, 8),
+                 anchor="w").pack(fill="x", pady=(2, 8))
+
+        # 전체 선택/해제
+        btn_row = tk.Frame(pad, bg=t["bg"])
+        btn_row.pack(fill="x", pady=(0, 4))
+
+        # 스크롤 영역
+        canvas_frame = tk.Frame(pad, bg=t["bg"])
+        canvas_frame.pack(fill="both", expand=True, pady=(0, 8))
+        canvas = tk.Canvas(canvas_frame, bg=t["card"], highlightthickness=0,
+                           bd=0)
+        canvas.pack(side="left", fill="both", expand=True)
+        list_frame = tk.Frame(canvas, bg=t["card"])
+        win_id = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win_id, width=e.width))
+        list_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+
+        checks: list = []
+        for folder, default_checked in candidates:
+            row = tk.Frame(list_frame, bg=t["card"])
+            row.pack(fill="x", padx=8, pady=2)
+            check = editor.CheckLabel(row, t, checked=default_checked)
+            check.pack(side="left")
+            tk.Label(row, text=folder.name, bg=t["card"], fg=t["text"],
+                     font=(FONT, 9), anchor="w").pack(
+                side="left", padx=(6, 0))
+            checks.append((folder, check))
+
+        def select_all() -> None:
+            for _, c in checks:
+                c.set(True)
+
+        def deselect_all() -> None:
+            for _, c in checks:
+                c.set(False)
+
+        sel_lbl = tk.Label(btn_row, text="전체 선택", bg=t["bg"],
+                           fg=t["accent"], font=(FONT, 9, "underline"),
+                           cursor="hand2")
+        sel_lbl.pack(side="left")
+        sel_lbl.bind("<Button-1>", lambda e: select_all())
+        desel_lbl = tk.Label(btn_row, text="전체 해제", bg=t["bg"],
+                             fg=t["subtext"], font=(FONT, 9, "underline"),
+                             cursor="hand2")
+        desel_lbl.pack(side="left", padx=(12, 0))
+        desel_lbl.bind("<Button-1>", lambda e: deselect_all())
+
+        result = {"selected": []}
+
+        def do_move() -> None:
+            result["selected"] = [f for f, c in checks if c.checked]
+            win.destroy()
+
+        def cancel() -> None:
+            result["selected"] = []
+            win.destroy()
+
+        bottom = tk.Frame(pad, bg=t["bg"])
+        bottom.pack(fill="x")
+        tk.Button(bottom, text="취소", command=cancel, bg=t["card"],
+                  fg=t["text"], relief="flat", padx=12, cursor="hand2",
+                  font=(FONT, 9)).pack(side="right")
+        tk.Button(bottom, text="이동", command=do_move, bg=t["accent"],
+                  fg="#ffffff", relief="flat", padx=12, cursor="hand2",
+                  font=(FONT, 9, "bold")).pack(side="right", padx=(0, 4))
+
+        # 모달 대기
+        win.transient(parent_win)
+        win.grab_set()
+        parent_win.wait_window(win)
+        return result["selected"]
 
     def _show_shortcuts_popup(self) -> None:
         """? 버튼 — 단축키·입력 형식을 다크 팝업으로 안내. 각 항목은 정보용(no-op)."""
@@ -2446,37 +2564,48 @@ class DashboardWidget:
             disk = load_config()
             new_manual = v_manual_root.get().strip()
             old_manual = (self.cfg.get("manual_project_root") or "").strip()
-            # manual_project_root가 바뀌었고 옛 폴더에 수동 생성 프로젝트가 있으면
-            # 새 폴더로 옮길지 사용자에게 물음 (옛 폴더는 자동 발견 대상에서 빠지므로
-            # 그대로 두면 위젯에서 안 보이게 됨)
-            if old_manual and old_manual != new_manual:
-                from tkinter import messagebox
-                old_path = Path(old_manual).resolve()
-                movable = discover_direct_projects(old_path)
-                if movable:
-                    if new_manual:
-                        dest_path = Path(new_manual).resolve()
-                    else:
-                        dest_path = Path(self.cfg["root"]).resolve()
-                    names = ", ".join(p.name for p in movable[:5])
-                    if len(movable) > 5:
-                        names += f", … 외 {len(movable) - 5}개"
-                    answer = messagebox.askyesno(
-                        "수동 생성 프로젝트 이동",
-                        f"이전 폴더에 {len(movable)}개 프로젝트가 있음:\n"
-                        f"  {names}\n\n"
-                        f"  이전: {old_path}\n"
-                        f"  새 위치: {dest_path}\n\n"
-                        f"새 폴더로 옮길까요?\n"
-                        f"(아니오 → 그대로 둠. 새 manual 폴더 안 보이게 됨)",
-                        parent=win)
-                    if answer:
-                        ok, errors = move_projects(movable, dest_path)
+            # manual_project_root 가 바뀌었으면 옮길 후보를 체크리스트로 물음.
+            # - 이전 manual에서 새 manual로: source=이전, 전부 미리 체크 (다 수동)
+            # - 처음 manual 설정: source=root, 다 미리 해제 (코딩 섞여있으므로 사용자가 선택)
+            if old_manual != new_manual:
+                dest_path = (Path(new_manual).resolve() if new_manual
+                             else Path(self.cfg["root"]).resolve())
+                root_path = Path(self.cfg["root"]).resolve()
+                # 후보 모으기 — 이전 manual 직속(있으면, 기본 체크)
+                # + root 직속(기본 해제, 코딩 섞여 있음)
+                candidates: list = []  # [(Path, default_checked), ...]
+                seen: set = set()
+                if old_manual:
+                    old_path = Path(old_manual).resolve()
+                    if old_path != dest_path:
+                        for p in discover_direct_projects(old_path):
+                            if p.parent.resolve() == dest_path:
+                                continue
+                            rp = p.resolve()
+                            if rp in seen:
+                                continue
+                            seen.add(rp)
+                            candidates.append((p, True))
+                if root_path != dest_path:
+                    for p in discover_direct_projects(root_path):
+                        if p.parent.resolve() == dest_path:
+                            continue
+                        rp = p.resolve()
+                        if rp in seen:
+                            continue
+                        seen.add(rp)
+                        candidates.append((p, False))
+                if candidates:
+                    to_move = self._ask_projects_to_move(
+                        win, candidates, dest_path)
+                    if to_move:
+                        ok, errors = move_projects(to_move, dest_path)
                         if errors:
+                            from tkinter import messagebox
                             messagebox.showwarning(
                                 "이동 결과",
-                                f"성공 {ok}개 / 문제 {len(errors)}개:\n\n"
-                                + "\n".join(errors),
+                                f"성공 {ok}개 / 문제 {len(errors)}개:"
+                                "\n\n" + "\n".join(errors),
                                 parent=win)
             disk["refresh_seconds"] = refresh
             disk["manual_project_root"] = new_manual

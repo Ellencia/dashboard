@@ -355,11 +355,24 @@ class _ProjectEditor:
     # ------------------------------------------------------------------
     def _save_name(self) -> None:
         name = self.v_name.get().strip()
-        if name and name != self.name:
-            core.set_project_name(self.status_path, name)
-            self.name = name
-            self.win.title(f"편집 — {name}")
-            self.on_change()
+        if not name or name == self.name:
+            return
+        # 폴더 이름과 STATUS '# 제목' 을 동시에 변경 (같은 폴더 이름이면 제목만)
+        try:
+            new_folder = core.rename_project_folder(
+                self.status_path.parent, name, self.cfg)
+        except (ValueError, FileExistsError, OSError) as e:
+            from tkinter import messagebox
+            messagebox.showerror("이름 변경 실패", str(e), parent=self.win)
+            self.v_name.set(self.name)   # 입력칸 원복
+            return
+        # 폴더가 옮겨졌으면 편집창의 경로도 새 위치로 갱신
+        self.status_path = new_folder / core.STATUS_FILENAME
+        self.update_path = new_folder / core.UPDATE_FILENAME
+        self.folder_name = new_folder.name
+        self.name = name
+        self.win.title(f"편집 — {name}")
+        self.on_change()
 
     def _save_note(self) -> None:
         note = self.v_note.get().strip()

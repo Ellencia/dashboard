@@ -1,6 +1,6 @@
 # 프로젝트 대시보드
 
-> 위젯·트레이 모드 가동 중. 주요 기능 완성 — 배경 합성 모드는 계획 취소.
+> Qt(PySide6) 기본, tk 백엔드는 legacy 로 보존. 모든 핵심 기능 Qt 로 포팅 완료.
 
 - [x] STATUS.md 파싱 + 진행률 계산 (core.py)
 - [x] 위젯 모드 UI (항상 위, 드래그, 진행바, 할 일)
@@ -35,4 +35,15 @@
 - [x] 프로젝트 템플릿 (templates/*.md, 새 프로젝트 드롭다운, {{name}} 치환)
 - [x] 주간 완료 통계 배지 (📈 이번주 N, _history.jsonl 기반)
 - [x] 트레이 마감 알림 (pystray.notify, 30분 주기, 자정 리셋)
+- [x] **Qt(PySide6) 마이그레이션** — 새 `qt/` 패키지로 모든 기능 포팅. tk 백엔드보다 부드러운 리사이즈·드래그, 모던 위젯
+- [x] Qt 카드 UI — 진행률 + 메모 + 최근 변경 (todo 는 통합 영역만)
+- [x] Qt 편집창 — 이름/메모/마감, 할 일 CRUD, 다른 프로젝트로 이동, update.md 기록
+- [x] Qt 드래그 reorder — 카드 ⋮⋮ 핸들, drop indicator 가로선
+- [x] Qt 트레이 — `QSystemTrayIcon` 도넛 진행률 + 메뉴 (외부 라이브러리 불요)
+- [x] Qt 글로벌 단축키 — `hotkey.GlobalHotkey`(Win32) 재사용 + PySide6 `Signal` 로 main thread 안전 전달
+- [x] Qt 설정 다이얼로그 — 폭/높이/투명도/topmost/주기/manual_project_root/단축키/태그 색
+- [x] 통합 '전체 할 일' 영역 — 프로젝트별 그룹 + 마감순/완료보기 토글 + 태그 통계 칩 + 태그 필터
+- [x] 할 일 빠른 입력 (Ctrl+T) — `[프로젝트] 텍스트 #태그 !마감`, 없으면 인박스
+- [x] `main.py` 분기 — `cfg.ui="qt"` 기본, `"tk"` 면 legacy 사용
+- [x] 할 일 → work-inbox 한 건씩 넘기기 (편집창 ↗ 메뉴)
 - [ ] 카톡 공유 → LLM 추출 → 컨펌 → STATUS.md 자동 추가 #다음단계

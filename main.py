@@ -1,23 +1,33 @@
 """프로젝트 대시보드 진입점.
 
-config.json의 display_mode 값에 따라 표시 방식을 고름.
-"widget"(항상 위 위젯 창)과 "tray"(트레이 아이콘) 두 가지가 있음.
+기본은 Qt(PySide6) 백엔드. config.json 의 `"ui": "tk"` 면 legacy tkinter
+백엔드로 폴백 — widget.py/editor.py/tray.py 는 그대로 보존돼 있음.
 
 실행:
     python main.py        # 오류 메시지를 보고 싶을 때
-    pythonw main.py       # 콘솔 창 없이 조용히 실행 (run.bat이 이 방식)
+    pythonw main.py       # 콘솔 창 없이 (run.bat 이 이 방식)
+
+Qt 백엔드를 직접 실행하려면:
+    python -m qt.main
 """
 from __future__ import annotations
 
 import sys
 import traceback
 
-import singleton
 from core import load_config
 
 
-def main() -> None:
-    # 중복 실행 방지 — 이미 떠 있으면 그 인스턴스를 띄우고 조용히 종료
+def _run_qt() -> None:
+    """PySide6 진입점 — qt 패키지의 main() 으로 위임 (singleton 도 거기서)."""
+    from qt.main import main as qt_main
+    qt_main()
+
+
+def _run_tk_legacy() -> None:
+    """tkinter 백엔드 — 옛 main.py 와 동일한 분기."""
+    import singleton
+
     ipc = singleton.acquire()
     if ipc is None:
         print("대시보드가 이미 실행 중입니다 — 기존 창을 띄웠습니다.")
@@ -25,36 +35,34 @@ def main() -> None:
 
     cfg = load_config()
     mode = cfg.get("display_mode", "widget")
-
-    if mode == "widget":
-        from widget import run_widget
-        run_widget(ipc)
-    elif mode == "tray":
+    if mode == "tray":
         try:
             from tray import run_tray
         except ImportError as e:
-            # pystray/pillow 미설치 시 위젯 모드로 대체
             print("트레이 모드에는 pystray·pillow가 필요함: "
                   f"pip install pystray pillow\n({e})")
             from widget import run_widget
             run_widget(ipc)
         else:
             run_tray(ipc)
-    elif mode == "wallpaper":
-        # 'wallpaper' 모드는 계획 취소 — 옛 설정값이면 위젯 모드로 대체
-        print("'wallpaper' 모드는 지원하지 않음. 위젯 모드로 실행함.")
+    else:
         from widget import run_widget
         run_widget(ipc)
+
+
+def main() -> None:
+    cfg = load_config()
+    ui = cfg.get("ui", "qt")
+    if ui == "tk":
+        _run_tk_legacy()
     else:
-        print(f"알 수 없는 display_mode: {mode!r}  (widget / tray / wallpaper 중 하나)")
-        sys.exit(1)
+        _run_qt()
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # pythonw로 실행하면 콘솔이 없어 오류가 안 보이므로 파일로도 남김
         traceback.print_exc()
         from core import BASE_DIR
         (BASE_DIR / "error.log").write_text(

@@ -16,3 +16,9 @@ env/
 .idea/
 Thumbs.db
 desktop.ini
+
+# 핸드오프 파일
+design_handoff_project_board/
+
+# 실행 로그
+*.log

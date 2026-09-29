@@ -33,6 +33,8 @@ UPDATE_FILENAME = "update.md"
 INBOX_FOLDER_NAME = "_inbox"   # 프로젝트 미할당 todo가 들어가는 가상 프로젝트
 DROP_FOLDER_NAME = "_drop"     # 외부에서 JSON 드롭하면 자동 인식되는 폴더
 HISTORY_FILENAME = "_history.jsonl"   # 완료 이벤트 한 줄씩 (주간 통계용)
+# work-inbox(텔레그램 업무 대기실) DB — 할 일을 한 건씩 넘기는 목적지
+WORK_INBOX_DB = Path("C:/Programming_STC/projects/work-inbox/data/work_inbox.db")
 
 # 마크다운 체크박스 한 줄을 인식하는 정규식.
 #   "- [ ] 할 일"  /  "- [x] 끝난 일"  /  "* [X] ..." 모두 매칭
@@ -122,12 +124,28 @@ DEFAULT_CONFIG = {
     "exclude": [],
     # 위젯에서 숨긴 프로젝트들의 폴더 이름 목록
     "hidden": [],
-    # 위젯에서 카드를 접어 둔 프로젝트들의 폴더 이름 목록
+    # (deprecated) 옛 동작: 명시적으로 접은 카드 목록. 현재는 expanded 사용
     "collapsed": [],
+    # 사용자가 명시적으로 펼친 카드 목록 — 여기 없으면 default 컴팩트(collapsed)
+    "expanded": [],
     # 카드를 드래그해 정한 프로젝트 표시 순서 (폴더 이름 목록)
     "project_order": [],
     # 몇 초마다 파일을 다시 읽어 화면을 갱신할지
     "refresh_seconds": 30,
+    # UI 백엔드: "qt"(PySide6, 기본) 또는 "tk"(legacy tkinter)
+    "ui": "qt",
+    # 빠른 할 일 입력의 기본 프로젝트 (folder 이름). 비우면 인박스(_inbox).
+    # 텍스트에 `[프로젝트]` 가 명시되면 그게 우선. 입력칸 좌측 칩으로 일회성 변경 가능.
+    "default_quick_project": "",
+    # 발주 트래커 워크플로 정의 — {워크플로명: [단계1, 단계2, ...]}.
+    # 카드 우클릭 → '발주 트래커' 다이얼로그에서 사용. 프로젝트별 orders.json 에
+    # 어떤 워크플로 쓰는지 명시. 사용자가 cfg 에 새 워크플로 추가 가능.
+    "workflows": {
+        "발주": ["견적", "기안", "발주", "입고", "결재"],
+        "월마감": ["홈택스비교", "자료전달", "기안"],
+        "구매카드": ["구매", "영수증스캔", "발주입력", "구매입력", "기안"],
+        "개인경비": ["영수증수령", "지출서작성", "기안", "원본전달"],
+    },
     # 표시 모드: "widget"(항상 위 위젯 창) 또는 "tray"(트레이 아이콘)
     "display_mode": "widget",
     # 위젯 모드 전용 설정
@@ -416,13 +434,14 @@ def scan_projects(cfg: dict) -> list[Project]:
                     folders.append(rp)
 
     hidden_names = set(cfg.get("hidden", []))
-    collapsed_names = set(cfg.get("collapsed", []))
+    expanded_names = set(cfg.get("expanded", []))
     projects: list[Project] = []
     for folder in folders:
         proj = _read_project(folder)
         if proj is not None:
             proj.hidden = proj.folder.name in hidden_names
-            proj.collapsed = proj.folder.name in collapsed_names
+            # default 컴팩트 — expanded 리스트에 명시된 카드만 펼침
+            proj.collapsed = proj.folder.name not in expanded_names
             projects.append(proj)
 
     # 사용자가 카드 드래그로 정한 순서대로 정렬.
@@ -461,10 +480,77 @@ def toggle_hidden(cfg: dict, folder_name: str) -> bool:
 
 
 def toggle_collapsed(cfg: dict, folder_name: str) -> bool:
-    """프로젝트 카드의 접힘 상태를 뒤집어 config.json에 저장. 새 상태(True=접힘)를 반환."""
-    new_state, items = _toggle_in_config_list("collapsed", folder_name)
-    cfg["collapsed"] = items
-    return new_state
+    """프로젝트 카드의 접힘 상태를 뒤집어 config.json에 저장.
+
+    default 컴팩트 모드 — `expanded` 리스트 토글. 폴더 이름이 expanded 에 추가되면
+    펼침(collapsed=False), 제거되면 컴팩트(collapsed=True).
+    반환: 새 collapsed 상태 (True=컴팩트).
+    """
+    new_expanded, items = _toggle_in_config_list("expanded", folder_name)
+    cfg["expanded"] = items
+    return not new_expanded
+
+
+ORDERS_FILENAME = "orders.json"
+
+
+def load_orders(folder: Path) -> dict:
+    """프로젝트 폴더의 orders.json 을 읽음. 없으면 빈 구조."""
+    path = folder / ORDERS_FILENAME
+    if not path.exists():
+        return {"workflow": "발주", "rows": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"workflow": "발주", "rows": []}
+    data.setdefault("workflow", "발주")
+    data.setdefault("rows", [])
+    return data
+
+
+def save_orders(folder: Path, data: dict) -> None:
+    """orders.json 저장. UTF-8 (BOM 없음). indent 2."""
+    path = folder / ORDERS_FILENAME
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def workflow_stages(cfg: dict, name: str) -> list[str]:
+    """워크플로 이름 → 단계 리스트. 없으면 빈 리스트."""
+    flows = cfg.get("workflows") or {}
+    return list(flows.get(name, []))
+
+
+def register_new_project(cfg: dict, folder_name: str) -> None:
+    """새로 만든 프로젝트를 펼친 상태(expanded) + 인박스 바로 다음 위치에 등록.
+
+    사용자가 빠른 입력/다이얼로그로 만든 프로젝트가 카드 영역 맨 위에 펼친 상태로
+    바로 보이도록. 사용자가 즉시 시각 확인 가능. 디스크 cfg 도 동기 저장.
+    """
+    disk = load_config()
+    # expanded 에 추가
+    expanded = list(disk.get("expanded", []))
+    if folder_name not in expanded:
+        expanded.append(folder_name)
+        disk["expanded"] = expanded
+        cfg["expanded"] = expanded
+    # project_order 의 인박스 바로 다음 (인박스 없으면 맨 앞)
+    order = list(disk.get("project_order", []))
+    if folder_name in order:
+        order.remove(folder_name)
+    if INBOX_FOLDER_NAME in order:
+        idx = order.index(INBOX_FOLDER_NAME) + 1
+    else:
+        idx = 0
+    order.insert(idx, folder_name)
+    disk["project_order"] = order
+    cfg["project_order"] = order
+    try:
+        save_config(disk)
+    except OSError:
+        pass
 
 
 def set_project_order(cfg: dict, folder_names: list[str]) -> None:
@@ -532,6 +618,63 @@ def set_project_name(status_path: Path, name: str) -> None:
     else:
         lines.insert(0, f"# {name}")
     _write_lines(status_path, lines)
+
+
+def rename_project_folder(folder: Path, new_name: str,
+                          cfg: dict | None = None) -> Path:
+    """프로젝트 폴더 이름과 STATUS.md '# 제목' 줄을 동시에 새 이름으로 바꿈.
+
+    옛 폴더는 사라지고 새 폴더가 그 부모 위치에 생성됨. 새 폴더 Path 반환.
+    cfg 가 주어지면 `hidden`/`collapsed`/`project_order` 의 옛 폴더 이름을
+    새 폴더 이름으로 치환 (cfg 인-플레이스 + 디스크 저장 모두).
+
+    Raises:
+        ValueError: 인박스 가상 프로젝트 또는 빈 이름/금지 문자만 있는 경우
+        FileExistsError: 같은 이름의 폴더가 이미 있음
+        OSError: 폴더 rename 실패 (잠김·권한 문제 등)
+    """
+    new_folder = safe_folder_name(new_name)
+    if not new_folder:
+        raise ValueError("이름에 쓸 수 있는 글자가 없습니다")
+    if folder.name == INBOX_FOLDER_NAME:
+        raise ValueError("받은 편지함은 이름을 바꿀 수 없습니다")
+
+    old_name = folder.name
+    status_path = folder / STATUS_FILENAME
+
+    # 폴더 이름이 같으면 (특수문자만 빠진 경우 등) STATUS '# 제목' 만 갱신
+    if new_folder == old_name:
+        if status_path.exists():
+            set_project_name(status_path, new_name)
+        return folder
+
+    new_path = folder.parent / new_folder
+    if new_path.exists():
+        raise FileExistsError(f"이미 '{new_folder}' 폴더가 있습니다")
+
+    import shutil
+    shutil.move(str(folder), str(new_path))
+
+    # 새 위치의 STATUS.md 제목 갱신
+    new_status = new_path / STATUS_FILENAME
+    if new_status.exists():
+        set_project_name(new_status, new_name)
+
+    # config.json 의 폴더 이름 키들 치환
+    disk = load_config()
+    changed = False
+    for key in ("hidden", "collapsed", "expanded", "project_order"):
+        lst = disk.get(key, [])
+        new_lst = [new_folder if x == old_name else x for x in lst]
+        if new_lst != lst:
+            disk[key] = new_lst
+            if cfg is not None:
+                cfg[key] = new_lst
+            changed = True
+    if changed:
+        save_config(disk)
+
+    return new_path
 
 
 def set_project_due(status_path: Path, iso_date: str) -> None:
@@ -762,6 +905,29 @@ def delete_item(status_path: Path, text: str) -> None:
             del lines[i]
             break
     _write_lines(status_path, lines)
+
+
+def send_to_work_inbox(status_path: Path, text: str, project: str,
+                       db: Path = WORK_INBOX_DB) -> int:
+    """할 일 한 줄을 work-inbox DB 로 넘기고 STATUS.md 에서 뺌. 새 번호 반환.
+
+    DB 에 먼저 넣고 나서 지우므로, 중간에 실패해도 잃지 않고 양쪽에 남을 뿐.
+    """
+    import sqlite3
+    from datetime import datetime
+    if not db.exists():
+        raise FileNotFoundError(f"work-inbox DB 없음: {db}")
+    raw = f"[{project}] {text}" if project else text
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    con = sqlite3.connect(db)
+    try:
+        with con:
+            rid = con.execute("INSERT INTO request(ts, raw_text) VALUES (?, ?)",
+                              (ts, raw)).lastrowid
+    finally:
+        con.close()
+    delete_item(status_path, text)
+    return rid
 
 
 def set_item_done(status_path: Path, text: str, done: bool) -> None:
