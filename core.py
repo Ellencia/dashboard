@@ -34,7 +34,7 @@ INBOX_FOLDER_NAME = "_inbox"   # 프로젝트 미할당 todo가 들어가는 가
 DROP_FOLDER_NAME = "_drop"     # 외부에서 JSON 드롭하면 자동 인식되는 폴더
 HISTORY_FILENAME = "_history.jsonl"   # 완료 이벤트 한 줄씩 (주간 통계용)
 # work-inbox(텔레그램 업무 대기실) DB — 할 일을 한 건씩 넘기는 목적지
-WORK_INBOX_DB = Path("C:/Programming_STC/projects/work-inbox/data/work_inbox.db")
+WORK_INBOX_DB = Path("C:/Programming_STC/projects/Coorperative-bots/sunbot/data/work_inbox.db")
 
 # 마크다운 체크박스 한 줄을 인식하는 정규식.
 #   "- [ ] 할 일"  /  "- [x] 끝난 일"  /  "* [X] ..." 모두 매칭
